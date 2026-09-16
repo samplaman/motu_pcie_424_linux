@@ -87,6 +87,19 @@ static int motu424_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 		return -ENOENT;
 	}
 
+	/*
+	 * The PCIe-424 (HD Express) is a different card generation: an
+	 * ARM+Xilinx design that needs a firmware image uploaded over PCIe
+	 * before it does anything, unlike the classic PCI-324/424's
+	 * self-configuring Altera FPGA that this driver's register model
+	 * (motu424_hw.c) assumes.
+	 */
+	if (ent->device == MOTU424_DEV_PCI424_C) {
+		dev_warn(&pci->dev,
+			 "PCIe-424 (HD Express) is not supported yet: firmware upload is not implemented\n");
+		return -ENODEV;
+	}
+
 	/* Card is devm-managed: its teardown is tied to the pci device. */
 	err = snd_devm_card_new(&pci->dev, index[dev], id[dev], THIS_MODULE,
 				sizeof(*chip), &card);

@@ -2497,7 +2497,7 @@ class ChannelEqWindow(Adw.Window):
 
             sw_en = Gtk.Switch(active=True if idx > 0 else False, valign=Gtk.Align.CENTER)
             sw_en.set_tooltip_text(f"Enable / disable {title}")
-            sw_en.connect("state-set", lambda _s, _v, i=idx: self._on_slider_changed(i))
+            sw_en.connect("state-set", lambda _s, _v, i=idx: self._on_switch_toggled(i, _v))
             hdr.append(sw_en)
             card.append(hdr)
 
@@ -2587,13 +2587,19 @@ class ChannelEqWindow(Adw.Window):
         self._save_current_state()
         return False
 
-    def _on_slider_changed(self, band_idx):
+    def _on_switch_toggled(self, idx, active):
+        if self._eq_updating or idx >= len(self._eq_controls):
+            return False
+        self._on_slider_changed(idx, en_override=active)
+        return False
+
+    def _on_slider_changed(self, band_idx, en_override=None):
         if self._eq_updating or band_idx >= len(self._eq_controls):
             return
         self._eq_updating = True
         try:
             ctrls = self._eq_controls[band_idx]
-            en = ctrls["sw_en"].get_active()
+            en = en_override if en_override is not None else ctrls["sw_en"].get_active()
             freq = ctrls["sc_freq"].get_value()
             gain = ctrls["sc_gain"].get_value() if "sc_gain" in ctrls else 0.0
             q = ctrls["sc_q"].get_value() if "sc_q" in ctrls else 0.707
@@ -2610,9 +2616,24 @@ class ChannelEqWindow(Adw.Window):
         finally:
             self._eq_updating = False
 
-    def _on_eq_visual_changed(self, band_idx, freq, gain, q, enabled):
+    def _on_eq_visual_changed(self, band_idx, b_or_freq, gain=None, q=None, enabled=None):
         if self._eq_updating or band_idx >= len(self._eq_controls):
             return
+        if hasattr(b_or_freq, "freq"):
+            b = b_or_freq
+            freq = b.freq
+            gain = b.gain
+            q = b.q
+            enabled = b.enabled
+        else:
+            freq = b_or_freq
+            if gain is None:
+                gain = 0.0
+            if q is None:
+                q = 0.707
+            if enabled is None:
+                enabled = True
+
         self._eq_updating = True
         try:
             ctrls = self._eq_controls[band_idx]

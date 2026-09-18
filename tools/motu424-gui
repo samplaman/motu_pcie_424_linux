@@ -121,15 +121,17 @@ def cli_verify_fw(args):
                 break
     if not target:
         here = os.path.dirname(os.path.abspath(__file__))
-        for c in ["vendor/HDExpress_FullImageRun.bin",
+        for c in ["../vendor/HDExpress_FullImageRun.bin",
+                  "vendor/HDExpress_FullImageRun.bin",
+                  os.path.join(os.path.dirname(here), "vendor/HDExpress_FullImageRun.bin"),
                   "/lib/firmware/HDExpress_FullImageRun.bin",
-                  os.path.join(here, "vendor/HDExpress_FullImageRun.bin"),
-                  os.path.join(os.path.dirname(here), "vendor/HDExpress_FullImageRun.bin")]:
+                  os.path.join(here, "../vendor/HDExpress_FullImageRun.bin"),
+                  os.path.join(here, "vendor/HDExpress_FullImageRun.bin")]:
             if os.path.isfile(c):
                 target = c
                 break
     if not target:
-        target = "vendor/HDExpress_FullImageRun.bin"
+        target = "../vendor/HDExpress_FullImageRun.bin"
 
     res = verify_firmware_file(target)
     if not res.get("valid"):
@@ -3847,12 +3849,19 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                                       description="Verifies the ARM32 SoC + Xilinx Virtex FPGA container container")
         
         row_file = Adw.ActionRow(title="Firmware File Path")
-        self.ent_fw_path = Gtk.Entry(text="vendor/HDExpress_FullImageRun.bin", hexpand=True)
-        # Check standard locations
-        for c in ["vendor/HDExpress_FullImageRun.bin", "/lib/firmware/HDExpress_FullImageRun.bin", os.path.join(HERE, "vendor/HDExpress_FullImageRun.bin")]:
+        fw_default = "../vendor/HDExpress_FullImageRun.bin"
+        for c in [
+            "../vendor/HDExpress_FullImageRun.bin",
+            "vendor/HDExpress_FullImageRun.bin",
+            os.path.join(os.path.dirname(HERE), "vendor/HDExpress_FullImageRun.bin"),
+            "/lib/firmware/HDExpress_FullImageRun.bin",
+            os.path.join(HERE, "../vendor/HDExpress_FullImageRun.bin"),
+            os.path.join(HERE, "vendor/HDExpress_FullImageRun.bin")
+        ]:
             if os.path.isfile(c):
-                self.ent_fw_path.set_text(c)
+                fw_default = c
                 break
+        self.ent_fw_path = Gtk.Entry(text=fw_default, hexpand=True)
         btn_browse_fw = Gtk.Button(label="Verify File", valign=Gtk.Align.CENTER)
         btn_browse_fw.add_css_class("suggested-action")
         btn_browse_fw.connect("clicked", self._verify_fw)
@@ -3866,6 +3875,7 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         # Firmware status row
         self.row_fw_stat = Adw.ActionRow(title="Container Validation", subtitle="Not inspected yet")
         grp_fw.add(self.row_fw_stat)
+        GLib.idle_add(self._verify_fw)
         box.append(grp_fw)
 
         # DSP Engine Status Group
@@ -3945,21 +3955,33 @@ class MotuGuiWindow(Adw.ApplicationWindow):
 
         return scrolled
 
-    def _verify_fw(self, _btn):
+    def _verify_fw(self, _btn=None):
         path = self.ent_fw_path.get_text().strip()
-        if not os.path.isabs(path):
-            path = os.path.join(HERE, path)
-        res = verify_firmware_file(path)
+        candidates = [
+            path,
+            os.path.join(HERE, path),
+            os.path.join(os.path.dirname(HERE), path),
+            os.path.abspath(path),
+        ]
+        target_path = path
+        for cand in candidates:
+            if os.path.isfile(cand):
+                target_path = cand
+                break
+        res = verify_firmware_file(target_path)
         if not res.get("valid"):
             err = res.get("error", "Checksum validation failed")
             self.row_fw_stat.set_title("Validation Failed")
             self.row_fw_stat.set_subtitle(err)
-            self.toast("Firmware check: " + err)
+            if _btn is not None:
+                self.toast("Firmware check: " + err)
         else:
-            sub = f"OK: {res['payload_length']} bytes, Sum32: {res['expected_checksum']}, Load: {res['load_address']}, Sections: {len(res['sections'])}"
+            sub = f"OK: {res['file_size']:,} bytes • Sum32: {res['expected_checksum']} • Load: {res['load_address']} • Sections: {len(res['sections'])}"
             self.row_fw_stat.set_title("Valid HD Express Container")
             self.row_fw_stat.set_subtitle(sub)
-            self.toast("Firmware verified successfully")
+            if _btn is not None:
+                self.toast("Firmware verified successfully")
+        return False
 
     def _refresh_dmesg(self):
         log_text = get_dmesg_motu()

@@ -25,3 +25,8 @@ motu424-ctl: motu424-ctl.c
 
 clean:
 	rm -f motu424-probe motu424-ctl
+
+.PHONY: electron
+electron:
+	cd electron && npm install && npm start
+

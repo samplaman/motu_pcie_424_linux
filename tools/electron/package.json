@@ -1,0 +1,65 @@
+{
+  "name": "motu424-cuemix-studio",
+  "version": "2.0.0",
+  "description": "MOTU PCI-324 / PCI-424 / PCIe-424 Control & CueMix FX Studio",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "start:demo": "cross-env MOTU_DEMO=1 electron .",
+    "build": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:linux": "electron-builder --linux AppImage deb",
+    "dist:win": "electron-builder --win nsis"
+  },
+  "keywords": [
+    "motu",
+    "cuemix",
+    "pci424",
+    "audio",
+    "mixer",
+    "alsa",
+    "dsp",
+    "equalizer",
+    "compressor"
+  ],
+  "author": "MOTU PCI-424 Linux Team",
+  "license": "GPL-2.0-or-later",
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^28.2.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "org.motu424.cuemix-studio",
+    "productName": "MOTU CueMix FX Studio",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "darkModeSupport": true
+    },
+    "linux": {
+      "category": "AudioVideo;Audio;Mixer;",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    }
+  }
+}

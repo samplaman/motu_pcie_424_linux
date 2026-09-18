@@ -920,9 +920,9 @@ class VisualEQ(Gtk.DrawingArea):
         self._mouse_x = 0
         self._mouse_y = 0
 
-        self.set_content_height(260)
-        self.set_size_request(420, 250)
-        self.set_vexpand(False)
+        self.set_content_height(380)
+        self.set_size_request(600, 360)
+        self.set_vexpand(True)
         self.set_hexpand(True)
         self.set_draw_func(self._draw)
 
@@ -1588,6 +1588,9 @@ class VisualDynamics(Gtk.DrawingArea):
             self.enabled = bool(enabled)
         self.queue_draw()
 
+    def set_bypass(self, bypassed):
+        self.set_params_silent(enabled=not bypassed)
+
     def _draw(self, _area, cr, w, h):
         # 1. Dark Console Gradient Background
         pat = cairo.LinearGradient(0, 0, 0, h)
@@ -2249,26 +2252,44 @@ scale.fader slider:hover {
     background-color: #121720;
     border: 1px solid #1d2532;
     border-radius: 8px;
-    padding: 10px 14px;
+    padding: 12px 16px;
 }
 /* Custom Action Buttons */
 .btn-fx {
     font-family: monospace;
     font-weight: bold;
-    font-size: 8px;
+    font-size: 8.5px;
     min-height: 19px;
     min-width: 19px;
     padding: 1px 2px;
     border-radius: 3px;
-    background-color: #1e1b4b;
-    border: 1px solid #4338ca;
-    color: #a5b4fc;
+    background: linear-gradient(180deg, #1e2634 0%, #151b24 100%);
+    border: 1px solid #2d3b4d;
+    color: #00e5ff;
     box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 .btn-fx:hover {
-    background-color: #312e81;
-    color: #e0e7ff;
-    border-color: #6366f1;
+    background: linear-gradient(180deg, #263345 0%, #1a2330 100%);
+    color: #67e8f9;
+    border-color: #00e5ff;
+}
+.btn-fx:checked, .btn-fx-bypassed {
+    background: linear-gradient(180deg, #d97706 0%, #b45309 100%);
+    border-color: #f59e0b;
+    color: #ffffff;
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.btn-fx:checked:hover, .btn-fx-bypassed:hover {
+    background: linear-gradient(180deg, #f59e0b 0%, #d97706 100%);
+    border-color: #fbbf24;
+    color: #ffffff;
+}
+.slot-bypassed {
+    opacity: 0.50;
+    filter: grayscale(70%);
+}
+.inserts-bypassed {
+    border-color: #d97706 !important;
 }
 .btn-lock-locked {
     background: linear-gradient(180deg, #3b1818 0%, #291010 100%);
@@ -2410,7 +2431,7 @@ class ChannelEqWindow(Adw.Window):
         self.set_transient_for(main_win)
         self.set_modal(False)
         self.set_destroy_with_parent(True)
-        self.set_default_size(820, 560)
+        self.set_default_size(1080, 720)
         self.connect("close-request", self._on_close)
 
         # Main Layout Box
@@ -2465,6 +2486,8 @@ class ChannelEqWindow(Adw.Window):
         # Visual EQ Canvas Box
         box_canvas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         box_canvas.add_css_class("visual-eq-box")
+        box_canvas.set_vexpand(True)
+        box_canvas.set_size_request(-1, 380)
         self.visual_eq = VisualEQ(on_band_changed=self._on_eq_visual_changed)
         box_canvas.append(self.visual_eq)
         box_content.append(box_canvas)
@@ -2513,7 +2536,7 @@ class ChannelEqWindow(Adw.Window):
             sc_freq.set_hexpand(True)
             lbl_f_val = Gtk.Label(label=f"{f_def} Hz" if f_def < 1000 else f"{f_def/1000:.1f}k")
             lbl_f_val.add_css_class("strip-val")
-            lbl_f_val.set_size_request(48, -1)
+            lbl_f_val.set_size_request(58, -1)
             sc_freq.connect("value-changed", lambda _s, i=idx: self._on_slider_changed(i))
             f_box.append(lbl_f_tag)
             f_box.append(sc_freq)
@@ -2533,7 +2556,7 @@ class ChannelEqWindow(Adw.Window):
                 sc_gain.set_hexpand(True)
                 lbl_g_val = Gtk.Label(label="0.0 dB")
                 lbl_g_val.add_css_class("strip-val")
-                lbl_g_val.set_size_request(48, -1)
+                lbl_g_val.set_size_request(58, -1)
                 sc_gain.connect("value-changed", lambda _s, i=idx: self._on_slider_changed(i))
                 g_box.append(lbl_g_tag)
                 g_box.append(sc_gain)
@@ -2553,7 +2576,7 @@ class ChannelEqWindow(Adw.Window):
                 sc_q.set_hexpand(True)
                 lbl_q_val = Gtk.Label(label=f"Q: {sc_q.get_value():.1f}")
                 lbl_q_val.add_css_class("strip-val")
-                lbl_q_val.set_size_request(48, -1)
+                lbl_q_val.set_size_request(58, -1)
                 sc_q.connect("value-changed", lambda _s, i=idx: self._on_slider_changed(i))
                 q_box.append(lbl_q_tag)
                 q_box.append(sc_q)
@@ -2585,6 +2608,8 @@ class ChannelEqWindow(Adw.Window):
         disp = self.main_win.get_channel_display_name(self.token)
         self.main_win.toast(f"{disp} EQ: {'Active' if active else 'Bypassed'}")
         self._save_current_state()
+        if hasattr(self.main_win, "set_channel_fx_bypass"):
+            self.main_win.set_channel_fx_bypass(self.ch_idx, bypassed=(not active), token=self.token, notify=False)
         return False
 
     def _on_switch_toggled(self, idx, active):
@@ -2696,33 +2721,39 @@ class ChannelEqWindow(Adw.Window):
         if not hasattr(self.main_win, "channel_eq_states"):
             self.main_win.channel_eq_states = {}
         state = self.main_win.channel_eq_states.get(self.ch_idx)
-        if not state:
-            return
+
+        is_bypassed = False
+        if hasattr(self.main_win, "channel_inserts") and self.ch_idx in self.main_win.channel_inserts:
+            is_bypassed = self.main_win.channel_inserts[self.ch_idx].get("bypassed", False)
+
+        pwr = not is_bypassed
+        if state and "power" in state:
+            pwr = state["power"] and (not is_bypassed)
+
         self._eq_updating = True
         try:
-            pwr = state.get("power", True)
             self.sw_power.set_active(pwr)
             self.visual_eq.set_bypass(not pwr)
-            bands = state.get("bands", [])
-            for idx, b in enumerate(bands):
-                if idx < len(self._eq_controls):
-                    ctrls = self._eq_controls[idx]
-                    en = b.get("enabled", True)
-                    freq = b.get("freq", 1000.0)
-                    gain = b.get("gain", 0.0)
-                    q = b.get("q", 0.707)
+            if state and "bands" in state:
+                for idx, b in enumerate(state["bands"]):
+                    if idx < len(self._eq_controls):
+                        ctrls = self._eq_controls[idx]
+                        en = b.get("enabled", True)
+                        freq = b.get("freq", 1000.0)
+                        gain = b.get("gain", 0.0)
+                        q = b.get("q", 0.707)
 
-                    ctrls["sw_en"].set_active(en)
-                    ctrls["sc_freq"].set_value(freq)
-                    freq_str = f"{int(freq)} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
-                    ctrls["lbl_freq"].set_text(freq_str)
-                    if "sc_gain" in ctrls:
-                        ctrls["sc_gain"].set_value(gain)
-                        ctrls["lbl_gain"].set_text(f"{gain:+.1f} dB")
-                    if "sc_q" in ctrls:
-                        ctrls["sc_q"].set_value(q)
-                        ctrls["lbl_q"].set_text(f"Q: {q:.1f}")
-                    self.visual_eq.set_band_silent(idx, freq=freq, gain=gain, q=q, enabled=en)
+                        ctrls["sw_en"].set_active(en)
+                        ctrls["sc_freq"].set_value(freq)
+                        freq_str = f"{int(freq)} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
+                        ctrls["lbl_freq"].set_text(freq_str)
+                        if "sc_gain" in ctrls:
+                            ctrls["sc_gain"].set_value(gain)
+                            ctrls["lbl_gain"].set_text(f"{gain:+.1f} dB")
+                        if "sc_q" in ctrls:
+                            ctrls["sc_q"].set_value(q)
+                            ctrls["lbl_q"].set_text(f"Q: {q:.1f}")
+                        self.visual_eq.set_band_silent(idx, freq=freq, gain=gain, q=q, enabled=en)
         finally:
             self._eq_updating = False
 
@@ -2751,7 +2782,7 @@ class ChannelDynWindow(Adw.Window):
         self.set_transient_for(main_win)
         self.set_modal(False)
         self.set_destroy_with_parent(True)
-        self.set_default_size(780, 540)
+        self.set_default_size(880, 600)
         self.connect("close-request", self._on_close)
 
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -2950,6 +2981,8 @@ class ChannelDynWindow(Adw.Window):
         disp = self.main_win.get_channel_display_name(self.token)
         self.main_win.toast(f"{disp} Compressor: {'Active' if active else 'Bypassed'}")
         self._save_current_state()
+        if hasattr(self.main_win, "set_channel_fx_bypass"):
+            self.main_win.set_channel_fx_bypass(self.ch_idx, bypassed=(not active), token=self.token, notify=False)
         return False
 
     def _on_slider_changed(self):
@@ -3486,6 +3519,82 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         if target in ("comp", "dyn"):
             return self.open_channel_comp_window(ch_idx, token)
         return self.open_channel_eq_window(ch_idx, token)
+
+    def set_channel_fx_bypass(self, ch_idx, bypassed=None, token=None, notify=True):
+        if not hasattr(self, "channel_inserts"):
+            self.channel_inserts = {}
+        if ch_idx not in self.channel_inserts:
+            self.channel_inserts[ch_idx] = {"eq": False, "comp": False, "bypassed": False}
+
+        current = self.channel_inserts[ch_idx].get("bypassed", False)
+        if bypassed is None:
+            bypassed = not current
+        else:
+            bypassed = bool(bypassed)
+
+        self.channel_inserts[ch_idx]["bypassed"] = bypassed
+
+        if token is None:
+            token = f"A Analog {ch_idx:02d}"
+        disp = self.get_channel_display_name(token)
+
+        # Update channel EQ state
+        if not hasattr(self, "channel_eq_states"):
+            self.channel_eq_states = {}
+        if ch_idx not in self.channel_eq_states:
+            self.channel_eq_states[ch_idx] = {"power": not bypassed, "bands": []}
+        else:
+            self.channel_eq_states[ch_idx]["power"] = not bypassed
+
+        # Synchronize open EQ Window if present
+        if hasattr(self, "channel_eq_windows") and ch_idx in self.channel_eq_windows:
+            win = self.channel_eq_windows[ch_idx]
+            try:
+                if hasattr(win, "sw_power") and win.sw_power.get_active() != (not bypassed):
+                    win.sw_power.set_active(not bypassed)
+                if hasattr(win, "visual_eq"):
+                    win.visual_eq.set_bypass(bypassed)
+            except Exception:
+                pass
+
+        # Synchronize open Dynamics Window if present
+        if hasattr(self, "channel_dyn_windows") and ch_idx in self.channel_dyn_windows:
+            win = self.channel_dyn_windows[ch_idx]
+            try:
+                if hasattr(win, "sw_power") and win.sw_power.get_active() != (not bypassed):
+                    win.sw_power.set_active(not bypassed)
+                if hasattr(win, "visual_dyn"):
+                    win.visual_dyn.set_bypass(bypassed)
+            except Exception:
+                pass
+
+        # Synchronize channel strip FX button and insert slots across all bus views
+        for bus_map in getattr(self, "bus_channel_strips", []):
+            ch_data = bus_map.get(token)
+            if not ch_data:
+                for t, d in bus_map.items():
+                    if d.get("idx") == ch_idx:
+                        ch_data = d
+                        break
+            if ch_data:
+                btn_fx = ch_data.get("fx")
+                if btn_fx:
+                    if btn_fx.get_active() != bypassed:
+                        btn_fx.set_active(bypassed)
+                    btn_fx.set_label("BYP" if bypassed else "FX")
+                    if bypassed:
+                        btn_fx.add_css_class("btn-fx-bypassed")
+                        btn_fx.set_tooltip_text(f"FX Bypassed (Click to engage inserts for {disp})")
+                    else:
+                        btn_fx.remove_css_class("btn-fx-bypassed")
+                        btn_fx.set_tooltip_text(f"FX Active (Click to bypass inserts for {disp})")
+
+                if "refresh_inserts" in ch_data:
+                    ch_data["refresh_inserts"]()
+
+        if notify:
+            self.toast(f"{disp} FX: {'Bypassed' if bypassed else 'Active'}")
+        return bypassed
 
     def _on_lock_button_clicked(self):
         if self.settings_unlocked:
@@ -4200,11 +4309,16 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 insert_rect.remove(child)
                 child = nxt
 
-            ch_state = self.channel_inserts.get(idx, {"eq": False, "comp": False})
+            ch_state = self.channel_inserts.get(idx, {"eq": False, "comp": False, "bypassed": False})
+            is_byp = ch_state.get("bypassed", False)
             if ch_state["eq"] or ch_state["comp"]:
                 insert_rect.add_css_class("has-inserts")
             else:
                 insert_rect.remove_css_class("has-inserts")
+            if is_byp:
+                insert_rect.add_css_class("inserts-bypassed")
+            else:
+                insert_rect.remove_css_class("inserts-bypassed")
 
             # Active EQ Insert Slot
             if ch_state["eq"]:
@@ -4213,8 +4327,10 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 btn_eq = Gtk.Button(label="EQ")
                 btn_eq.add_css_class("insert-slot-btn")
                 btn_eq.add_css_class("eq-active")
+                if is_byp:
+                    btn_eq.add_css_class("slot-bypassed")
                 btn_eq.set_hexpand(True)
-                btn_eq.set_tooltip_text(f"Configure On-Board Parametric EQ for {tok_label(tok)}")
+                btn_eq.set_tooltip_text(f"Configure On-Board Parametric EQ for {tok_label(tok)} ({'Bypassed' if is_byp else 'Active'})")
                 btn_eq.connect("clicked", lambda _, i=idx, t=tok: self.open_channel_eq_window(i, t))
 
                 btn_del_eq = Gtk.Button(label="×")
@@ -4237,8 +4353,10 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 btn_comp = Gtk.Button(label="COMP")
                 btn_comp.add_css_class("insert-slot-btn")
                 btn_comp.add_css_class("comp-active")
+                if is_byp:
+                    btn_comp.add_css_class("slot-bypassed")
                 btn_comp.set_hexpand(True)
-                btn_comp.set_tooltip_text(f"Configure On-Board Dynamics Compressor for {tok_label(tok)}")
+                btn_comp.set_tooltip_text(f"Configure On-Board Dynamics Compressor for {tok_label(tok)} ({'Bypassed' if is_byp else 'Active'})")
                 btn_comp.connect("clicked", lambda _, i=idx, t=tok: self.open_channel_comp_window(i, t))
 
                 btn_del_comp = Gtk.Button(label="×")
@@ -4339,11 +4457,25 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         btn_solo.add_css_class("btn-compact")
         btn_solo.set_tooltip_text(f"Solo {tok_label(tok)}")
 
-        btn_fx = Gtk.Button(label="FX")
+        is_bypassed = self.channel_inserts.get(idx, {}).get("bypassed", False)
+        btn_fx = Gtk.ToggleButton(label="BYP" if is_bypassed else "FX")
         btn_fx.add_css_class("btn-fx")
         btn_fx.add_css_class("btn-compact")
-        btn_fx.set_tooltip_text(f"Open Parametric EQ for {tok_label(tok)}")
-        btn_fx.connect("clicked", lambda _, i=idx, t=tok: self.open_channel_eq_window(i, t))
+        if is_bypassed:
+            btn_fx.add_css_class("btn-fx-bypassed")
+        btn_fx.set_active(is_bypassed)
+        btn_fx.set_tooltip_text(f"FX Bypassed (Click to engage inserts for {tok_label(tok)})" if is_bypassed else f"FX Active (Click to bypass inserts for {tok_label(tok)})")
+
+        def _on_fx_toggled(b):
+            self.set_channel_fx_bypass(idx, b.get_active(), tok)
+
+        btn_fx.connect("toggled", _on_fx_toggled)
+
+        # Right click gesture on FX button opens EQ window
+        rc_click = Gtk.GestureClick()
+        rc_click.set_button(3)
+        rc_click.connect("pressed", lambda _g, _n, _x, _y, i=idx, t=tok: self.open_channel_eq_window(i, t))
+        btn_fx.add_controller(rc_click)
 
         btn_box.append(btn_mute)
         btn_box.append(btn_solo)
@@ -4355,6 +4487,7 @@ class MotuGuiWindow(Adw.ApplicationWindow):
             "fader": scale,
             "solo": btn_solo,
             "mute": btn_mute,
+            "fx": btn_fx,
             "pan": pan_knob,
             "lbl_pan": lbl_pan,
             "lbl_val": lbl_val,

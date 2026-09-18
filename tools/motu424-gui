@@ -2271,39 +2271,793 @@ scale.fader slider:hover {
     border-color: #6366f1;
 }
 .btn-lock-locked {
-    background-color: #3b1818;
+    background: linear-gradient(180deg, #3b1818 0%, #291010 100%);
     color: #fca5a5;
     border: 1px solid #991b1b;
-    font-size: 11px;
+    font-family: monospace;
+    font-size: 9.5px;
     font-weight: 700;
-    padding: 4px 10px;
-    border-radius: 6px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    min-height: 20px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 .btn-lock-locked:hover {
-    background-color: #581c1c;
+    background: linear-gradient(180deg, #581c1c 0%, #3b1818 100%);
     color: #fee2e2;
     border-color: #dc2626;
+    box-shadow: 0 0 6px rgba(220, 38, 38, 0.4);
 }
 .btn-lock-unlocked {
-    background-color: #143826;
+    background: linear-gradient(180deg, #143826 0%, #0d281a 100%);
     color: #86efac;
     border: 1px solid #166534;
-    font-size: 11px;
+    font-family: monospace;
+    font-size: 9.5px;
     font-weight: 700;
-    padding: 4px 10px;
-    border-radius: 6px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    min-height: 20px;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 .btn-lock-unlocked:hover {
-    background-color: #194d34;
+    background: linear-gradient(180deg, #194d34 0%, #143826 100%);
     color: #bbf7d0;
     border-color: #22c55e;
+    box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
 }
 .dsp-nav-btn {
     min-width: 30px;
     min-height: 30px;
     padding: 4px;
 }
+/* Studio Status Bar at Bottom */
+.studio-status-bar {
+    background: linear-gradient(180deg, #13171e 0%, #0c0f13 100%);
+    border-top: 1px solid #1c242f;
+    padding: 3px 12px;
+    min-height: 26px;
+}
+.status-msg-label {
+    font-family: monospace;
+    font-size: 11px;
+    font-weight: 500;
+    color: #92a4b8;
+    transition: color 200ms ease;
+}
+.status-msg-active {
+    color: #00e5ff;
+    font-weight: 700;
+}
+.status-msg-idle {
+    color: #8da1b6;
+    font-weight: 500;
+}
+.status-icon {
+    color: #4b637a;
+    transition: color 200ms ease;
+}
+.status-icon-active {
+    color: #00e5ff;
+}
+.status-meta-text {
+    font-family: monospace;
+    font-size: 10px;
+    color: #6a7e93;
+    font-weight: 600;
+}
+.status-meta-sep {
+    color: #24303f;
+    font-size: 11px;
+    margin: 0 4px;
+}
+.status-pill {
+    font-family: monospace;
+    font-size: 9.5px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border-radius: 4px;
+    border: 1px solid transparent;
+}
+.status-pill-demo {
+    background-color: #261a0a;
+    color: #fca311;
+    border-color: #5c3a10;
+}
+.status-pill-hw {
+    background-color: #0a2216;
+    color: #34d399;
+    border-color: #0d5f3a;
+}
+.status-pill-locked {
+    background-color: #2b1111;
+    color: #f87171;
+    border-color: #631717;
+}
+.status-pill-unlocked {
+    background-color: #0a2416;
+    color: #4ade80;
+    border-color: #125732;
+}
+.status-pill-dsp {
+    background-color: #0c2738;
+    color: #00e5ff;
+    border-color: #0e4c6e;
+}
+.status-pill-dsp-bypass {
+    background-color: #161c24;
+    color: #63778c;
+    border-color: #222d3a;
+}
 """
+
+# -----------------------------------------------------------------------------
+# Channel Parametric EQ Popup Window
+# -----------------------------------------------------------------------------
+class ChannelEqWindow(Adw.Window):
+    """
+    Dedicated Popup Window for Channel Parametric EQ Processing.
+    Operates specifically for a single console channel.
+    """
+    def __init__(self, main_win, ch_idx, token):
+        super().__init__()
+        self.main_win = main_win
+        self.ch_idx = ch_idx
+        self.token = token
+        self._eq_updating = False
+        self._eq_controls = []
+
+        self.set_transient_for(main_win)
+        self.set_modal(False)
+        self.set_destroy_with_parent(True)
+        self.set_default_size(820, 560)
+        self.connect("close-request", self._on_close)
+
+        # Main Layout Box
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.set_content(vbox)
+
+        # HeaderBar
+        header = Adw.HeaderBar()
+        self.win_title = Adw.WindowTitle()
+        header.set_title_widget(self.win_title)
+        vbox.append(header)
+
+        self.badge_ch = Gtk.Label()
+        self.badge_ch.add_css_class("bank-badge")
+        self.badge_ch.add_css_class("analog")
+        header.pack_start(self.badge_ch)
+
+        lbl_pwr = Gtk.Label(label="Active")
+        lbl_pwr.add_css_class("strip-cap")
+        self.sw_power = Gtk.Switch(active=True, valign=Gtk.Align.CENTER)
+        self.sw_power.set_tooltip_text("Toggle Parametric EQ processing for this channel")
+        self.sw_power.connect("state-set", self._on_power_toggled)
+        header.pack_start(lbl_pwr)
+        header.pack_start(self.sw_power)
+
+        # Presets dropdown & Flat reset
+        lbl_preset = Gtk.Label(label="Preset:")
+        lbl_preset.add_css_class("strip-cap")
+        header.pack_end(lbl_preset)
+
+        preset_keys = list(VisualEQ.PRESETS.keys())
+        preset_names = [VisualEQ.PRESETS[k]["name"] for k in preset_keys]
+        self.dd_presets = Gtk.DropDown.new_from_strings(preset_names)
+        self.dd_presets.set_valign(Gtk.Align.CENTER)
+        self.dd_presets.connect("notify::selected", lambda d, _p: self.apply_preset(preset_keys[d.get_selected()]))
+        header.pack_end(self.dd_presets)
+
+        btn_flat = Gtk.Button(label="Flat (0 dB)")
+        btn_flat.add_css_class("ribbon-btn")
+        btn_flat.set_tooltip_text("Reset all EQ bands to 0 dB")
+        btn_flat.connect("clicked", lambda _: (self.dd_presets.set_selected(0), self.apply_preset("flat")))
+        header.pack_end(btn_flat)
+
+        # Scrolled content
+        scrolled = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        vbox.append(scrolled)
+
+        box_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=10, margin_bottom=16, margin_start=14, margin_end=14)
+        scrolled.set_child(box_content)
+
+        # Visual EQ Canvas Box
+        box_canvas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box_canvas.add_css_class("visual-eq-box")
+        self.visual_eq = VisualEQ(on_band_changed=self._on_eq_visual_changed)
+        box_canvas.append(self.visual_eq)
+        box_content.append(box_canvas)
+
+        # Band Parameter Cards in Horizontal Row
+        box_bands = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, hexpand=True)
+        box_content.append(box_bands)
+
+        bands_meta = [
+            ("HPF", "High-Pass Filter", "hpf", (0.20, 0.82, 0.95), 20, 500, 80, None, None),
+            ("LF", "Low Shelf Filter", "low_shelf", (0.28, 0.58, 0.98), 20, 1000, 100, -18, 18),
+            ("LM", "Low-Mid Parametric", "peak", (0.22, 0.85, 0.48), 80, 4000, 400, -18, 18),
+            ("HM", "High-Mid Parametric", "peak", (0.98, 0.72, 0.15), 400, 12000, 2500, -18, 18),
+            ("HF", "High Shelf Filter", "high_shelf", (0.85, 0.38, 0.85), 1500, 20000, 8000, -18, 18)
+        ]
+
+        for idx, (code, title, ftype, col, f_min, f_max, f_def, g_min, g_max) in enumerate(bands_meta):
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
+            card.add_css_class("eq-band-card")
+
+            hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            badge = Gtk.Label(label=f" {code} ")
+            badge.add_css_class("bank-badge")
+            badge.add_css_class("analog" if idx > 0 else "adat")
+            hdr.append(badge)
+
+            lbl_title = Gtk.Label(label=title if idx == 0 else code, hexpand=True, halign=Gtk.Align.START)
+            lbl_title.add_css_class("strip-title")
+            hdr.append(lbl_title)
+
+            sw_en = Gtk.Switch(active=True if idx > 0 else False, valign=Gtk.Align.CENTER)
+            sw_en.set_tooltip_text(f"Enable / disable {title}")
+            sw_en.connect("state-set", lambda _s, _v, i=idx: self._on_slider_changed(i))
+            hdr.append(sw_en)
+            card.append(hdr)
+
+            ctrls_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            band_dict = {"sw_en": sw_en}
+
+            # Freq Row
+            f_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+            lbl_f_tag = Gtk.Label(label="Freq:", halign=Gtk.Align.START)
+            lbl_f_tag.add_css_class("strip-cap")
+            sc_freq = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, f_min, f_max, 1.0)
+            sc_freq.set_value(f_def)
+            sc_freq.set_hexpand(True)
+            lbl_f_val = Gtk.Label(label=f"{f_def} Hz" if f_def < 1000 else f"{f_def/1000:.1f}k")
+            lbl_f_val.add_css_class("strip-val")
+            lbl_f_val.set_size_request(48, -1)
+            sc_freq.connect("value-changed", lambda _s, i=idx: self._on_slider_changed(i))
+            f_box.append(lbl_f_tag)
+            f_box.append(sc_freq)
+            f_box.append(lbl_f_val)
+            ctrls_box.append(f_box)
+
+            band_dict["sc_freq"] = sc_freq
+            band_dict["lbl_freq"] = lbl_f_val
+
+            # Gain Row
+            if g_min is not None and g_max is not None:
+                g_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+                lbl_g_tag = Gtk.Label(label="Gain:", halign=Gtk.Align.START)
+                lbl_g_tag.add_css_class("strip-cap")
+                sc_gain = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, g_min, g_max, 0.2)
+                sc_gain.set_value(0.0)
+                sc_gain.set_hexpand(True)
+                lbl_g_val = Gtk.Label(label="0.0 dB")
+                lbl_g_val.add_css_class("strip-val")
+                lbl_g_val.set_size_request(48, -1)
+                sc_gain.connect("value-changed", lambda _s, i=idx: self._on_slider_changed(i))
+                g_box.append(lbl_g_tag)
+                g_box.append(sc_gain)
+                g_box.append(lbl_g_val)
+                ctrls_box.append(g_box)
+
+                band_dict["sc_gain"] = sc_gain
+                band_dict["lbl_gain"] = lbl_g_val
+
+            # Q Row
+            if code in ("LM", "HM"):
+                q_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+                lbl_q_tag = Gtk.Label(label="Q:", halign=Gtk.Align.START)
+                lbl_q_tag.add_css_class("strip-cap")
+                sc_q = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.1, 10.0, 0.1)
+                sc_q.set_value(1.0 if code == "LM" else 1.4)
+                sc_q.set_hexpand(True)
+                lbl_q_val = Gtk.Label(label=f"Q: {sc_q.get_value():.1f}")
+                lbl_q_val.add_css_class("strip-val")
+                lbl_q_val.set_size_request(48, -1)
+                sc_q.connect("value-changed", lambda _s, i=idx: self._on_slider_changed(i))
+                q_box.append(lbl_q_tag)
+                q_box.append(sc_q)
+                q_box.append(lbl_q_val)
+                ctrls_box.append(q_box)
+
+                band_dict["sc_q"] = sc_q
+                band_dict["lbl_q"] = lbl_q_val
+
+            card.append(ctrls_box)
+            box_bands.append(card)
+            self._eq_controls.append(band_dict)
+
+        self.update_title()
+        self._load_saved_state()
+
+    def update_title(self):
+        disp = self.main_win.get_channel_display_name(self.token)
+        ch_num = self.ch_idx + 1
+        self.set_title(f"Parametric EQ — {disp} (Ch {ch_num:02d})")
+        if hasattr(self, "win_title"):
+            self.win_title.set_title(f"Parametric EQ — {disp}")
+            self.win_title.set_subtitle(f"Channel {ch_num:02d} • {self.token}")
+        if hasattr(self, "badge_ch"):
+            self.badge_ch.set_text(f" Ch {ch_num:02d}: {disp} ")
+
+    def _on_power_toggled(self, _sw, active):
+        self.visual_eq.set_bypass(not active)
+        disp = self.main_win.get_channel_display_name(self.token)
+        self.main_win.toast(f"{disp} EQ: {'Active' if active else 'Bypassed'}")
+        self._save_current_state()
+        return False
+
+    def _on_slider_changed(self, band_idx):
+        if self._eq_updating or band_idx >= len(self._eq_controls):
+            return
+        self._eq_updating = True
+        try:
+            ctrls = self._eq_controls[band_idx]
+            en = ctrls["sw_en"].get_active()
+            freq = ctrls["sc_freq"].get_value()
+            gain = ctrls["sc_gain"].get_value() if "sc_gain" in ctrls else 0.0
+            q = ctrls["sc_q"].get_value() if "sc_q" in ctrls else 0.707
+
+            freq_str = f"{int(freq)} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
+            ctrls["lbl_freq"].set_text(freq_str)
+            if "lbl_gain" in ctrls:
+                ctrls["lbl_gain"].set_text(f"{gain:+.1f} dB")
+            if "lbl_q" in ctrls:
+                ctrls["lbl_q"].set_text(f"Q: {q:.1f}")
+
+            self.visual_eq.set_band_silent(band_idx, freq=freq, gain=gain, q=q, enabled=en)
+            self._save_current_state()
+        finally:
+            self._eq_updating = False
+
+    def _on_eq_visual_changed(self, band_idx, freq, gain, q, enabled):
+        if self._eq_updating or band_idx >= len(self._eq_controls):
+            return
+        self._eq_updating = True
+        try:
+            ctrls = self._eq_controls[band_idx]
+            ctrls["sw_en"].set_active(enabled)
+            ctrls["sc_freq"].set_value(freq)
+            freq_str = f"{int(freq)} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
+            ctrls["lbl_freq"].set_text(freq_str)
+            if "sc_gain" in ctrls:
+                ctrls["sc_gain"].set_value(gain)
+                ctrls["lbl_gain"].set_text(f"{gain:+.1f} dB")
+            if "sc_q" in ctrls:
+                ctrls["sc_q"].set_value(q)
+                ctrls["lbl_q"].set_text(f"Q: {q:.1f}")
+            self._save_current_state()
+        finally:
+            self._eq_updating = False
+
+    def apply_preset(self, preset_key):
+        preset = VisualEQ.PRESETS.get(preset_key)
+        if not preset or len(self._eq_controls) < 5:
+            return
+        self._eq_updating = True
+        try:
+            for idx, (en, freq, gain, q) in enumerate(preset["bands"]):
+                ctrls = self._eq_controls[idx]
+                ctrls["sw_en"].set_active(en)
+                ctrls["sc_freq"].set_value(freq)
+                freq_str = f"{int(freq)} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
+                ctrls["lbl_freq"].set_text(freq_str)
+                if "sc_gain" in ctrls:
+                    ctrls["sc_gain"].set_value(gain)
+                    ctrls["lbl_gain"].set_text(f"{gain:+.1f} dB")
+                if "sc_q" in ctrls:
+                    ctrls["sc_q"].set_value(q)
+                    ctrls["lbl_q"].set_text(f"Q: {q:.1f}")
+                self.visual_eq.set_band_silent(idx, freq=freq, gain=gain, q=q, enabled=en)
+            self._save_current_state()
+        finally:
+            self._eq_updating = False
+        disp = self.main_win.get_channel_display_name(self.token)
+        self.main_win.toast(f"{disp} EQ: Loaded Preset '{preset['name']}'")
+
+    def _save_current_state(self):
+        state = {
+            "power": self.sw_power.get_active(),
+            "bands": []
+        }
+        for b in self.visual_eq.bands:
+            state["bands"].append({
+                "enabled": b.enabled,
+                "freq": b.freq,
+                "gain": b.gain,
+                "q": b.q
+            })
+        if not hasattr(self.main_win, "channel_eq_states"):
+            self.main_win.channel_eq_states = {}
+        self.main_win.channel_eq_states[self.ch_idx] = state
+
+    def _load_saved_state(self):
+        if not hasattr(self.main_win, "channel_eq_states"):
+            self.main_win.channel_eq_states = {}
+        state = self.main_win.channel_eq_states.get(self.ch_idx)
+        if not state:
+            return
+        self._eq_updating = True
+        try:
+            pwr = state.get("power", True)
+            self.sw_power.set_active(pwr)
+            self.visual_eq.set_bypass(not pwr)
+            bands = state.get("bands", [])
+            for idx, b in enumerate(bands):
+                if idx < len(self._eq_controls):
+                    ctrls = self._eq_controls[idx]
+                    en = b.get("enabled", True)
+                    freq = b.get("freq", 1000.0)
+                    gain = b.get("gain", 0.0)
+                    q = b.get("q", 0.707)
+
+                    ctrls["sw_en"].set_active(en)
+                    ctrls["sc_freq"].set_value(freq)
+                    freq_str = f"{int(freq)} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
+                    ctrls["lbl_freq"].set_text(freq_str)
+                    if "sc_gain" in ctrls:
+                        ctrls["sc_gain"].set_value(gain)
+                        ctrls["lbl_gain"].set_text(f"{gain:+.1f} dB")
+                    if "sc_q" in ctrls:
+                        ctrls["sc_q"].set_value(q)
+                        ctrls["lbl_q"].set_text(f"Q: {q:.1f}")
+                    self.visual_eq.set_band_silent(idx, freq=freq, gain=gain, q=q, enabled=en)
+        finally:
+            self._eq_updating = False
+
+    def _on_close(self, _win):
+        if hasattr(self.main_win, "channel_eq_windows") and self.ch_idx in self.main_win.channel_eq_windows:
+            del self.main_win.channel_eq_windows[self.ch_idx]
+        return False
+
+
+# -----------------------------------------------------------------------------
+# Channel Dynamics Compressor Popup Window
+# -----------------------------------------------------------------------------
+class ChannelDynWindow(Adw.Window):
+    """
+    Dedicated Popup Window for Channel Dynamics Compression.
+    Operates specifically for a single console channel.
+    """
+    def __init__(self, main_win, ch_idx, token):
+        super().__init__()
+        self.main_win = main_win
+        self.ch_idx = ch_idx
+        self.token = token
+        self._comp_updating = False
+        self._comp_controls = {}
+
+        self.set_transient_for(main_win)
+        self.set_modal(False)
+        self.set_destroy_with_parent(True)
+        self.set_default_size(780, 540)
+        self.connect("close-request", self._on_close)
+
+        vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.set_content(vbox)
+
+        header = Adw.HeaderBar()
+        self.win_title = Adw.WindowTitle()
+        header.set_title_widget(self.win_title)
+        vbox.append(header)
+
+        self.badge_ch = Gtk.Label()
+        self.badge_ch.add_css_class("bank-badge")
+        self.badge_ch.add_css_class("adat")
+        header.pack_start(self.badge_ch)
+
+        lbl_pwr = Gtk.Label(label="Active")
+        lbl_pwr.add_css_class("strip-cap")
+        self.sw_power = Gtk.Switch(active=True, valign=Gtk.Align.CENTER)
+        self.sw_power.set_tooltip_text("Toggle Dynamics Compressor on this channel")
+        self.sw_power.connect("state-set", self._on_power_toggled)
+        header.pack_start(lbl_pwr)
+        header.pack_start(self.sw_power)
+
+        lbl_preset = Gtk.Label(label="Preset:")
+        lbl_preset.add_css_class("strip-cap")
+        header.pack_end(lbl_preset)
+
+        dyn_preset_keys = list(VisualDynamics.PRESETS.keys())
+        dyn_preset_names = [VisualDynamics.PRESETS[k]["name"] for k in dyn_preset_keys]
+        self.dd_presets = Gtk.DropDown.new_from_strings(dyn_preset_names)
+        self.dd_presets.set_valign(Gtk.Align.CENTER)
+        self.dd_presets.connect("notify::selected", lambda d, _p: self.apply_preset(dyn_preset_keys[d.get_selected()]))
+        header.pack_end(self.dd_presets)
+
+        btn_reset = Gtk.Button(label="Default")
+        btn_reset.add_css_class("ribbon-btn")
+        btn_reset.connect("clicked", lambda _: (self.dd_presets.set_selected(0), self.apply_preset("vocal")))
+        header.pack_end(btn_reset)
+
+        scrolled = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
+        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
+        vbox.append(scrolled)
+
+        box_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=10, margin_bottom=16, margin_start=14, margin_end=14)
+        scrolled.set_child(box_content)
+
+        # Visual Dynamics Canvas Box
+        box_canvas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        box_canvas.add_css_class("visual-eq-box")
+        self.visual_dyn = VisualDynamics(on_params_changed=self._on_comp_visual_changed)
+        box_canvas.append(self.visual_dyn)
+        box_content.append(box_canvas)
+
+        # Dynamics Controls Cards
+        box_cards = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10, hexpand=True)
+        box_content.append(box_cards)
+
+        # Card 1: Threshold & Knee
+        card_th = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
+        card_th.add_css_class("eq-band-card")
+        lbl_th_hdr = Gtk.Label(label="Threshold & Knee", halign=Gtk.Align.START)
+        lbl_th_hdr.add_css_class("strip-title")
+        card_th.append(lbl_th_hdr)
+
+        th_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lbl_th_tag = Gtk.Label(label="Thresh:", halign=Gtk.Align.START)
+        lbl_th_tag.add_css_class("strip-cap")
+        sc_th = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -45.0, 0.0, 0.5)
+        sc_th.set_value(-16.0)
+        sc_th.set_hexpand(True)
+        lbl_th_val = Gtk.Label(label="-16.0 dB")
+        lbl_th_val.add_css_class("strip-val")
+        lbl_th_val.set_size_request(55, -1)
+        sc_th.connect("value-changed", lambda _s: self._on_slider_changed())
+        th_box.append(lbl_th_tag)
+        th_box.append(sc_th)
+        th_box.append(lbl_th_val)
+        card_th.append(th_box)
+
+        kn_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lbl_kn_tag = Gtk.Label(label="Knee:", halign=Gtk.Align.START)
+        lbl_kn_tag.add_css_class("strip-cap")
+        sc_knee = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 12.0, 0.5)
+        sc_knee.set_value(4.0)
+        sc_knee.set_hexpand(True)
+        lbl_kn_val = Gtk.Label(label="4.0 dB")
+        lbl_kn_val.add_css_class("strip-val")
+        lbl_kn_val.set_size_request(55, -1)
+        sc_knee.connect("value-changed", lambda _s: self._on_slider_changed())
+        kn_box.append(lbl_kn_tag)
+        kn_box.append(sc_knee)
+        kn_box.append(lbl_kn_val)
+        card_th.append(kn_box)
+        box_cards.append(card_th)
+
+        # Card 2: Ratio & Makeup
+        card_r = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
+        card_r.add_css_class("eq-band-card")
+        lbl_r_hdr = Gtk.Label(label="Ratio & Gain", halign=Gtk.Align.START)
+        lbl_r_hdr.add_css_class("strip-title")
+        card_r.append(lbl_r_hdr)
+
+        r_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lbl_r_tag = Gtk.Label(label="Ratio:", halign=Gtk.Align.START)
+        lbl_r_tag.add_css_class("strip-cap")
+        sc_r = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1.0, 20.0, 0.2)
+        sc_r.set_value(3.5)
+        sc_r.set_hexpand(True)
+        lbl_r_val = Gtk.Label(label="3.5:1")
+        lbl_r_val.add_css_class("strip-val")
+        lbl_r_val.set_size_request(55, -1)
+        sc_r.connect("value-changed", lambda _s: self._on_slider_changed())
+        r_box.append(lbl_r_tag)
+        r_box.append(sc_r)
+        r_box.append(lbl_r_val)
+        card_r.append(r_box)
+
+        mu_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lbl_mu_tag = Gtk.Label(label="Makeup:", halign=Gtk.Align.START)
+        lbl_mu_tag.add_css_class("strip-cap")
+        sc_mu = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 24.0, 0.5)
+        sc_mu.set_value(3.0)
+        sc_mu.set_hexpand(True)
+        lbl_mu_val = Gtk.Label(label="+3.0 dB")
+        lbl_mu_val.add_css_class("strip-val")
+        lbl_mu_val.set_size_request(55, -1)
+        sc_mu.connect("value-changed", lambda _s: self._on_slider_changed())
+        mu_box.append(lbl_mu_tag)
+        mu_box.append(sc_mu)
+        mu_box.append(lbl_mu_val)
+        card_r.append(mu_box)
+        box_cards.append(card_r)
+
+        # Card 3: Attack & Release Time
+        card_t = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, hexpand=True)
+        card_t.add_css_class("eq-band-card")
+        lbl_t_hdr = Gtk.Label(label="Attack & Release", halign=Gtk.Align.START)
+        lbl_t_hdr.add_css_class("strip-title")
+        card_t.append(lbl_t_hdr)
+
+        att_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lbl_att_tag = Gtk.Label(label="Attack:", halign=Gtk.Align.START)
+        lbl_att_tag.add_css_class("strip-cap")
+        sc_att = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.1, 100.0, 0.5)
+        sc_att.set_value(12.0)
+        sc_att.set_hexpand(True)
+        lbl_att_val = Gtk.Label(label="12.0 ms")
+        lbl_att_val.add_css_class("strip-val")
+        lbl_att_val.set_size_request(55, -1)
+        sc_att.connect("value-changed", lambda _s: self._on_slider_changed())
+        att_box.append(lbl_att_tag)
+        att_box.append(sc_att)
+        att_box.append(lbl_att_val)
+        card_t.append(att_box)
+
+        rel_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        lbl_rel_tag = Gtk.Label(label="Release:", halign=Gtk.Align.START)
+        lbl_rel_tag.add_css_class("strip-cap")
+        sc_rel = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 10.0, 1000.0, 5.0)
+        sc_rel.set_value(140.0)
+        sc_rel.set_hexpand(True)
+        lbl_rel_val = Gtk.Label(label="140 ms")
+        lbl_rel_val.add_css_class("strip-val")
+        lbl_rel_val.set_size_request(55, -1)
+        sc_rel.connect("value-changed", lambda _s: self._on_slider_changed())
+        rel_box.append(lbl_rel_tag)
+        rel_box.append(sc_rel)
+        rel_box.append(lbl_rel_val)
+        card_t.append(rel_box)
+        box_cards.append(card_t)
+
+        self._comp_controls = {
+            "sc_th": sc_th, "lbl_th": lbl_th_val,
+            "sc_r": sc_r, "lbl_r": lbl_r_val,
+            "sc_att": sc_att, "lbl_att": lbl_att_val,
+            "sc_rel": sc_rel, "lbl_rel": lbl_rel_val,
+            "sc_mu": sc_mu, "lbl_mu": lbl_mu_val,
+            "sc_knee": sc_knee, "lbl_knee": lbl_kn_val
+        }
+
+        self.update_title()
+        self._load_saved_state()
+
+    def update_title(self):
+        disp = self.main_win.get_channel_display_name(self.token)
+        ch_num = self.ch_idx + 1
+        self.set_title(f"Dynamics Compressor — {disp} (Ch {ch_num:02d})")
+        if hasattr(self, "win_title"):
+            self.win_title.set_title(f"Dynamics Compressor — {disp}")
+            self.win_title.set_subtitle(f"Channel {ch_num:02d} • {self.token}")
+        if hasattr(self, "badge_ch"):
+            self.badge_ch.set_text(f" Ch {ch_num:02d}: {disp} ")
+
+    def _on_power_toggled(self, _sw, active):
+        self.visual_dyn.set_params_silent(enabled=active)
+        disp = self.main_win.get_channel_display_name(self.token)
+        self.main_win.toast(f"{disp} Compressor: {'Active' if active else 'Bypassed'}")
+        self._save_current_state()
+        return False
+
+    def _on_slider_changed(self):
+        if self._comp_updating:
+            return
+        self._comp_updating = True
+        try:
+            c = self._comp_controls
+            th = c["sc_th"].get_value()
+            r = c["sc_r"].get_value()
+            att = c["sc_att"].get_value()
+            rel = c["sc_rel"].get_value()
+            mu = c["sc_mu"].get_value()
+            kn = c["sc_knee"].get_value()
+
+            c["lbl_th"].set_text(f"{th:+.1f} dB")
+            c["lbl_r"].set_text(f"{r:.1f} : 1")
+            c["lbl_att"].set_text(f"{att:.1f} ms" if att < 10 else f"{int(att)} ms")
+            c["lbl_rel"].set_text(f"{int(rel)} ms")
+            c["lbl_mu"].set_text(f"{mu:+.1f} dB")
+            c["lbl_knee"].set_text(f"{kn:.1f} dB")
+
+            self.visual_dyn.set_params_silent(threshold=th, ratio=r, attack=att, release=rel, makeup=mu, knee=kn)
+            self._save_current_state()
+        finally:
+            self._comp_updating = False
+
+    def _on_comp_visual_changed(self, threshold, ratio, attack, release, makeup, knee):
+        if self._comp_updating:
+            return
+        self._comp_updating = True
+        try:
+            c = self._comp_controls
+            c["sc_th"].set_value(threshold)
+            c["lbl_th"].set_text(f"{threshold:+.1f} dB")
+            c["sc_r"].set_value(ratio)
+            c["lbl_r"].set_text(f"{ratio:.1f} : 1")
+            c["sc_mu"].set_value(makeup)
+            c["lbl_mu"].set_text(f"{makeup:+.1f} dB")
+            c["sc_knee"].set_value(knee)
+            c["lbl_knee"].set_text(f"{knee:.1f} dB")
+            self._save_current_state()
+        finally:
+            self._comp_updating = False
+
+    def apply_preset(self, preset_key):
+        p = VisualDynamics.PRESETS.get(preset_key)
+        if not p:
+            return
+        self._comp_updating = True
+        try:
+            c = self._comp_controls
+            c["sc_th"].set_value(p["threshold"])
+            c["sc_r"].set_value(p["ratio"])
+            c["sc_att"].set_value(p["attack"])
+            c["sc_rel"].set_value(p["release"])
+            c["sc_mu"].set_value(p["makeup"])
+            c["sc_knee"].set_value(p["knee"])
+
+            c["lbl_th"].set_text(f"{p['threshold']:+.1f} dB")
+            c["lbl_r"].set_text(f"{p['ratio']:.1f} : 1")
+            c["lbl_att"].set_text(f"{p['attack']:.1f} ms" if p['attack'] < 10 else f"{int(p['attack'])} ms")
+            c["lbl_rel"].set_text(f"{int(p['release'])} ms")
+            c["lbl_mu"].set_text(f"{p['makeup']:+.1f} dB")
+            c["lbl_knee"].set_text(f"{p['knee']:.1f} dB")
+
+            self.visual_dyn.set_params_silent(threshold=p["threshold"], ratio=p["ratio"], attack=p["attack"], release=p["release"], makeup=p["makeup"], knee=p["knee"])
+            self._save_current_state()
+        finally:
+            self._comp_updating = False
+        disp = self.main_win.get_channel_display_name(self.token)
+        self.main_win.toast(f"{disp} Comp: Loaded Preset '{p['name']}'")
+
+    def _save_current_state(self):
+        c = self._comp_controls
+        state = {
+            "power": self.sw_power.get_active(),
+            "threshold": c["sc_th"].get_value(),
+            "ratio": c["sc_r"].get_value(),
+            "attack": c["sc_att"].get_value(),
+            "release": c["sc_rel"].get_value(),
+            "makeup": c["sc_mu"].get_value(),
+            "knee": c["sc_knee"].get_value()
+        }
+        if not hasattr(self.main_win, "channel_dyn_states"):
+            self.main_win.channel_dyn_states = {}
+        self.main_win.channel_dyn_states[self.ch_idx] = state
+
+    def _load_saved_state(self):
+        if not hasattr(self.main_win, "channel_dyn_states"):
+            self.main_win.channel_dyn_states = {}
+        state = self.main_win.channel_dyn_states.get(self.ch_idx)
+        if not state:
+            return
+        self._comp_updating = True
+        try:
+            pwr = state.get("power", True)
+            self.sw_power.set_active(pwr)
+            self.visual_dyn.set_params_silent(enabled=pwr)
+            c = self._comp_controls
+            th = state.get("threshold", -16.0)
+            r = state.get("ratio", 3.5)
+            att = state.get("attack", 12.0)
+            rel = state.get("release", 140.0)
+            mu = state.get("makeup", 3.0)
+            kn = state.get("knee", 4.0)
+
+            c["sc_th"].set_value(th)
+            c["sc_r"].set_value(r)
+            c["sc_att"].set_value(att)
+            c["sc_rel"].set_value(rel)
+            c["sc_mu"].set_value(mu)
+            c["sc_knee"].set_value(kn)
+
+            c["lbl_th"].set_text(f"{th:+.1f} dB")
+            c["lbl_r"].set_text(f"{r:.1f} : 1")
+            c["lbl_att"].set_text(f"{att:.1f} ms" if att < 10 else f"{int(att)} ms")
+            c["lbl_rel"].set_text(f"{int(rel)} ms")
+            c["lbl_mu"].set_text(f"{mu:+.1f} dB")
+            c["lbl_knee"].set_text(f"{kn:.1f} dB")
+
+            self.visual_dyn.set_params_silent(threshold=th, ratio=r, attack=att, release=rel, makeup=mu, knee=kn)
+        finally:
+            self._comp_updating = False
+
+    def _on_close(self, _win):
+        if hasattr(self.main_win, "channel_dyn_windows") and self.ch_idx in self.main_win.channel_dyn_windows:
+            del self.main_win.channel_dyn_windows[self.ch_idx]
+        return False
 
 # -----------------------------------------------------------------------------
 # Main Application Window
@@ -2322,6 +3076,11 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         self._syncing_toggles = False
         self.bus_channel_strips = []
         self.input_name_rows = {}
+        self.channel_eq_windows = {}
+        self.channel_eq_states = {}
+        self.channel_dyn_windows = {}
+        self.channel_dyn_states = {}
+        self._status_timeout_id = None
         self._load_channel_names()
 
         # Toast overlay for feedback
@@ -2347,12 +3106,7 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         self.lbl_card_status.add_css_class("strip-cap")
         header.pack_start(self.lbl_card_status)
 
-        # Header end widgets: Settings Lock button & Demo mode switch
-        self.btn_lock = Gtk.Button(label="LOCKED", tooltip_text="Settings Lock: Protected with PIN 1234 to prevent accidental changes")
-        self.btn_lock.add_css_class("btn-lock-locked")
-        self.btn_lock.connect("clicked", lambda _: self._on_lock_button_clicked())
-        header.pack_end(self.btn_lock)
-
+        # Header end widgets: Demo mode switch
         demo_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         demo_lbl = Gtk.Label(label="Demo Rig")
         demo_lbl.add_css_class("strip-cap")
@@ -2362,7 +3116,7 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         demo_box.append(self.sw_demo)
         header.pack_end(demo_box)
 
-        # ViewStack (Main Sections)
+        # ViewStack (Main Sections: Mixer Console, I/O Routing, Workbench)
         self.view_stack = Adw.ViewStack(vexpand=True, hexpand=True)
         self.title_switcher.set_stack(self.view_stack)
         main_box.append(self.view_stack)
@@ -2371,20 +3125,22 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         page_mixer = self.build_mixer_tab()
         self.view_stack.add_titled_with_icon(page_mixer, "mixer", "Mixer Console", "audio-volume-high-symbolic")
 
-        # 2. DSP Studio Tab (Dedicated top-level view)
-        page_dsp = self.build_dsp_tab()
-        self.view_stack.add_titled_with_icon(page_dsp, "dsp", "DSP Studio", "audio-card-symbolic")
-
-        # 3. I/O Routing & Sync Tab
+        # 2. I/O Routing & Sync Tab
         page_routing = self.build_routing_tab()
         self.view_stack.add_titled_with_icon(page_routing, "routing", "I/O Routing", "network-transmit-receive-symbolic")
 
-        # 4. Hardware Workbench Tab
+        # 3. Hardware Workbench Tab
         page_wb = self.build_workbench_tab()
         self.view_stack.add_titled_with_icon(page_wb, "workbench", "Workbench", "emblem-system-symbolic")
 
         # Set default tab to Mixer Console
         self.view_stack.set_visible_child_name("mixer")
+
+        # 5. Studio Status Bar at Bottom (replaces obstructing floating toasts)
+        self.status_bar = self._build_status_bar()
+        main_box.append(self.status_bar)
+
+        self.view_stack.connect("notify::visible-child-name", self._on_main_view_changed)
 
         # Apply initial lock state across protected controls
         self._update_lock_state()
@@ -2395,8 +3151,123 @@ class MotuGuiWindow(Adw.ApplicationWindow):
 
         self.refresh_all()
 
+    def _get_default_status_text(self):
+        if self.demo_mode:
+            return "Ready • MOTU 24i Simulated Console (24ch Mono Direct Analogs)"
+        cards = get_motu_cards()
+        if cards:
+            return f"Ready • {cards[0]['model']} ({cards[0]['driver']}) • 24 Channels Active"
+        return "Ready • MOTU PCI-424 CueMix Studio Console"
+
+    def _build_status_bar(self):
+        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        bar.add_css_class("studio-status-bar")
+        bar.set_hexpand(True)
+
+        # Left: Message / Notification display
+        left_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8, hexpand=True)
+        left_box.set_halign(Gtk.Align.START)
+
+        self.img_status_icon = Gtk.Image.new_from_icon_name("audio-volume-high-symbolic")
+        self.img_status_icon.add_css_class("status-icon")
+        left_box.append(self.img_status_icon)
+
+        self.lbl_status_msg = Gtk.Label(label=self._get_default_status_text())
+        self.lbl_status_msg.add_css_class("status-msg-label")
+        self.lbl_status_msg.add_css_class("status-msg-idle")
+        self.lbl_status_msg.set_halign(Gtk.Align.START)
+        self.lbl_status_msg.set_xalign(0.0)
+        self.lbl_status_msg.set_ellipsize(Pango.EllipsizeMode.END)
+        left_box.append(self.lbl_status_msg)
+
+        bar.append(left_box)
+
+        # Right: Rig Telemetry & Status Badges
+        right_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        right_box.set_halign(Gtk.Align.END)
+
+        self.lbl_status_chans = Gtk.Label(label="24 Ins • Mix 1 (Main Out)")
+        self.lbl_status_chans.add_css_class("status-meta-text")
+        right_box.append(self.lbl_status_chans)
+
+        sep1 = Gtk.Label(label="|")
+        sep1.add_css_class("status-meta-sep")
+        right_box.append(sep1)
+
+        self.lbl_status_hw = Gtk.Label(label="DEMO RIG: 24i" if self.demo_mode else "HARDWARE")
+        self.lbl_status_hw.add_css_class("status-pill")
+        self.lbl_status_hw.add_css_class("status-pill-demo" if self.demo_mode else "status-pill-hw")
+        right_box.append(self.lbl_status_hw)
+
+        # Interactive Settings Lock button on bottom status bar
+        self.btn_lock = Gtk.Button(label="LOCKED", tooltip_text="Settings Locked (PIN 1234). Click to unlock.")
+        self.btn_lock.add_css_class("btn-lock-locked")
+        self.btn_lock.connect("clicked", lambda _: self._on_lock_button_clicked())
+        self.lbl_status_lock = self.btn_lock
+        right_box.append(self.btn_lock)
+
+        bar.append(right_box)
+        return bar
+
+    def _on_main_view_changed(self, _stack, _param):
+        name = self.view_stack.get_visible_child_name()
+        titles = {
+            "mixer": "Mixer Console (CueMix FX)",
+            "routing": "I/O Routing & Sync Matrix",
+            "workbench": "Engineering Workbench & Hardware Probe"
+        }
+        if name in titles:
+            self.set_status_message(f"Viewing {titles[name]}", timeout_sec=4)
+
+    def set_status_message(self, msg, timeout_sec=6):
+        def _apply():
+            if not hasattr(self, "lbl_status_msg") or self.lbl_status_msg is None:
+                return False
+            clean_msg = str(msg).strip()
+            self.lbl_status_msg.set_text(clean_msg)
+            self.lbl_status_msg.set_tooltip_text(clean_msg)
+
+            self.lbl_status_msg.remove_css_class("status-msg-idle")
+            self.lbl_status_msg.add_css_class("status-msg-active")
+            if hasattr(self, "img_status_icon") and self.img_status_icon:
+                self.img_status_icon.add_css_class("status-icon-active")
+
+            if self._status_timeout_id:
+                try:
+                    GLib.source_remove(self._status_timeout_id)
+                except Exception:
+                    pass
+                self._status_timeout_id = None
+
+            if timeout_sec and timeout_sec > 0:
+                def _revert():
+                    self._status_timeout_id = None
+                    if hasattr(self, "lbl_status_msg") and self.lbl_status_msg:
+                        self.lbl_status_msg.remove_css_class("status-msg-active")
+                        self.lbl_status_msg.add_css_class("status-msg-idle")
+                        if hasattr(self, "img_status_icon") and self.img_status_icon:
+                            self.img_status_icon.remove_css_class("status-icon-active")
+                        self.lbl_status_msg.set_text(self._get_default_status_text())
+                    return False
+                self._status_timeout_id = GLib.timeout_add_seconds(timeout_sec, _revert)
+            return False
+
+        GLib.idle_add(_apply)
+
     def toast(self, msg):
-        self.toast_overlay.add_toast(Adw.Toast.new(GLib.markup_escape_text(str(msg))))
+        """Displays notifications in the bottom status bar rather than obstructing the mixer view."""
+        self.set_status_message(msg)
+
+    def _update_dsp_status_pill(self, active):
+        if hasattr(self, "lbl_status_dsp") and self.lbl_status_dsp:
+            if active:
+                self.lbl_status_dsp.set_text("DSP: Active")
+                self.lbl_status_dsp.remove_css_class("status-pill-dsp-bypass")
+                self.lbl_status_dsp.add_css_class("status-pill-dsp")
+            else:
+                self.lbl_status_dsp.set_text("DSP: Bypass")
+                self.lbl_status_dsp.remove_css_class("status-pill-dsp")
+                self.lbl_status_dsp.add_css_class("status-pill-dsp-bypass")
 
     def _load_channel_names(self):
         self.channel_names = {}
@@ -2453,16 +3324,19 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 disp = self.get_channel_display_name(tok)
                 row.set_subtitle(f"Label: {disp}")
 
-        if hasattr(self, "dd_dsp_ch") and hasattr(self, "dsp_channel_tokens"):
-            new_dsp_names = []
-            for i, t in enumerate(self.dsp_channel_tokens):
-                disp = self.get_channel_display_name(t)
-                new_dsp_names.append(f"Ch {i+1:02d}: {disp}")
-            self.dsp_channel_names = new_dsp_names
-            cur_sel = self.dd_dsp_ch.get_selected()
-            self.dd_dsp_ch.set_model(Gtk.StringList.new(new_dsp_names))
-            if 0 <= cur_sel < len(new_dsp_names):
-                self.dd_dsp_ch.set_selected(cur_sel)
+        if hasattr(self, "channel_eq_windows"):
+            for win in list(self.channel_eq_windows.values()):
+                try:
+                    win.update_title()
+                except Exception:
+                    pass
+
+        if hasattr(self, "channel_dyn_windows"):
+            for win in list(self.channel_dyn_windows.values()):
+                try:
+                    win.update_title()
+                except Exception:
+                    pass
 
     def _open_rename_popover(self, btn_anchor, tok):
         popover = Gtk.Popover()
@@ -2537,17 +3411,60 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         popover.set_child(vbox)
         popover.popup()
 
-    def open_dsp_channel(self, ch_idx, target=None):
-        if hasattr(self, "dd_dsp_ch") and hasattr(self, "dsp_channel_names") and 0 <= ch_idx < len(self.dsp_channel_names):
-            self.dd_dsp_ch.set_selected(ch_idx)
-        self.view_stack.set_visible_child_name("dsp")
-        if target == "eq" and hasattr(self, "btn_mode_eq"):
-            self.btn_mode_eq.set_active(True)
-        elif target in ("comp", "dyn") and hasattr(self, "btn_mode_dyn"):
-            self.btn_mode_dyn.set_active(True)
-        name = self.dsp_channel_names[ch_idx] if hasattr(self, "dsp_channel_names") and 0 <= ch_idx < len(self.dsp_channel_names) else f"Ch {ch_idx+1:02d}"
-        target_str = f" [{target.upper()}]" if target else ""
-        self.toast(f"DSP Studio: {name}{target_str}")
+    def open_channel_eq_window(self, ch_idx, token=None):
+        if token is None:
+            token = f"A Analog {ch_idx:02d}"
+        if not hasattr(self, "channel_eq_windows"):
+            self.channel_eq_windows = {}
+
+        win = self.channel_eq_windows.get(ch_idx)
+        if win is not None:
+            try:
+                win.update_title()
+                win.present()
+                disp = self.get_channel_display_name(token)
+                self.toast(f"Parametric EQ: {disp} (Ch {ch_idx+1:02d})")
+                return win
+            except Exception:
+                pass
+
+        win = ChannelEqWindow(self, ch_idx, token)
+        self.channel_eq_windows[ch_idx] = win
+        win.present()
+        disp = self.get_channel_display_name(token)
+        self.toast(f"Opened Parametric EQ: {disp} (Ch {ch_idx+1:02d})")
+        return win
+
+    def open_channel_comp_window(self, ch_idx, token=None):
+        if token is None:
+            token = f"A Analog {ch_idx:02d}"
+        if not hasattr(self, "channel_dyn_windows"):
+            self.channel_dyn_windows = {}
+
+        win = self.channel_dyn_windows.get(ch_idx)
+        if win is not None:
+            try:
+                win.update_title()
+                win.present()
+                disp = self.get_channel_display_name(token)
+                self.toast(f"Dynamics Compressor: {disp} (Ch {ch_idx+1:02d})")
+                return win
+            except Exception:
+                pass
+
+        win = ChannelDynWindow(self, ch_idx, token)
+        self.channel_dyn_windows[ch_idx] = win
+        win.present()
+        disp = self.get_channel_display_name(token)
+        self.toast(f"Opened Dynamics Compressor: {disp} (Ch {ch_idx+1:02d})")
+        return win
+
+    def open_dsp_channel(self, ch_idx, target=None, token=None):
+        if token is None:
+            token = f"A Analog {ch_idx:02d}"
+        if target in ("comp", "dyn"):
+            return self.open_channel_comp_window(ch_idx, token)
+        return self.open_channel_eq_window(ch_idx, token)
 
     def _on_lock_button_clicked(self):
         if self.settings_unlocked:
@@ -2592,16 +3509,17 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         dlg.present()
 
     def _update_lock_state(self):
-        if self.settings_unlocked:
-            self.btn_lock.set_label("UNLOCKED")
-            self.btn_lock.remove_css_class("btn-lock-locked")
-            self.btn_lock.add_css_class("btn-lock-unlocked")
-            self.btn_lock.set_tooltip_text("Settings Unlocked. Click to re-lock with PIN 1234.")
-        else:
-            self.btn_lock.set_label("LOCKED")
-            self.btn_lock.remove_css_class("btn-lock-unlocked")
-            self.btn_lock.add_css_class("btn-lock-locked")
-            self.btn_lock.set_tooltip_text("Settings Locked (PIN 1234). Click to unlock.")
+        if hasattr(self, "btn_lock") and self.btn_lock:
+            if self.settings_unlocked:
+                self.btn_lock.set_label("UNLOCKED")
+                self.btn_lock.remove_css_class("btn-lock-locked")
+                self.btn_lock.add_css_class("btn-lock-unlocked")
+                self.btn_lock.set_tooltip_text("Settings Unlocked. Click to re-lock with PIN 1234.")
+            else:
+                self.btn_lock.set_label("LOCKED")
+                self.btn_lock.remove_css_class("btn-lock-unlocked")
+                self.btn_lock.add_css_class("btn-lock-locked")
+                self.btn_lock.set_tooltip_text("Settings Locked (PIN 1234). Click to unlock.")
 
         for w in list(self.protected_widgets):
             try:
@@ -2760,6 +3678,7 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 self.row_dsp_stat.set_subtitle("Online • ARM SoC running, Virtex FPGA matrix ready")
             else:
                 self.row_dsp_stat.set_subtitle("Off • Pass-Through mode (Hardware DSP disabled by default)")
+            self._update_dsp_status_pill(v)
             self.toast(f"Hardware DSP Engine: {'Active' if v else 'Pass-Through (Off by default)'}")
             return False
 
@@ -2851,6 +3770,12 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         # Sub-Notebook for Mixer Tabs (Buses, Inputs, Outputs, Clock)
         self.mix_nb = Gtk.Notebook(vexpand=True, hexpand=True)
         self.mix_nb.set_tab_pos(Gtk.PositionType.TOP)
+        def _on_mix_switched(_nb, _page, page_num):
+            bus_names = ["Mix 1 (Main Out)", "Mix 2 (Aux 1)", "Mix 3 (Aux 2)", "Mix 4 (Aux 3)"]
+            bname = bus_names[page_num] if page_num < len(bus_names) else f"Mix Bus {page_num + 1}"
+            if hasattr(self, "lbl_status_chans") and self.lbl_status_chans:
+                self.lbl_status_chans.set_text(f"24 Ins • {bname}")
+        self.mix_nb.connect("switch-page", _on_mix_switched)
         vbox.append(self.mix_nb)
 
         # Build dynamic channels
@@ -3269,7 +4194,7 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 btn_eq.add_css_class("eq-active")
                 btn_eq.set_hexpand(True)
                 btn_eq.set_tooltip_text(f"Configure On-Board Parametric EQ for {tok_label(tok)}")
-                btn_eq.connect("clicked", lambda _, i=idx: self.open_dsp_channel(i, target="eq"))
+                btn_eq.connect("clicked", lambda _, i=idx, t=tok: self.open_channel_eq_window(i, t))
 
                 btn_del_eq = Gtk.Button(label="×")
                 btn_del_eq.add_css_class("insert-remove-btn")
@@ -3293,7 +4218,7 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 btn_comp.add_css_class("comp-active")
                 btn_comp.set_hexpand(True)
                 btn_comp.set_tooltip_text(f"Configure On-Board Dynamics Compressor for {tok_label(tok)}")
-                btn_comp.connect("clicked", lambda _, i=idx: self.open_dsp_channel(i, target="comp"))
+                btn_comp.connect("clicked", lambda _, i=idx, t=tok: self.open_channel_comp_window(i, t))
 
                 btn_del_comp = Gtk.Button(label="×")
                 btn_del_comp.add_css_class("insert-remove-btn")
@@ -3333,10 +4258,10 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                     def on_add_eq(_):
                         popover.popdown()
                         self.channel_inserts[idx]["eq"] = True
-                        if hasattr(self, "sw_dsp_enable"):
-                            self.sw_dsp_enable.set_active(True)
+                        if hasattr(self, "sw_dsp"):
+                            self.sw_dsp.set_active(True)
                         refresh_insert_slots()
-                        self.open_dsp_channel(idx, target="eq")
+                        self.open_channel_eq_window(idx, tok)
                         self.toast(f"Added Parametric EQ to {tok_label(tok)}")
                     btn_add_eq.connect("clicked", on_add_eq)
                     pop_box.append(btn_add_eq)
@@ -3347,10 +4272,10 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                     def on_add_comp(_):
                         popover.popdown()
                         self.channel_inserts[idx]["comp"] = True
-                        if hasattr(self, "sw_dsp_enable"):
-                            self.sw_dsp_enable.set_active(True)
+                        if hasattr(self, "sw_dsp"):
+                            self.sw_dsp.set_active(True)
                         refresh_insert_slots()
-                        self.open_dsp_channel(idx, target="comp")
+                        self.open_channel_comp_window(idx, tok)
                         self.toast(f"Added Dynamics Compressor to {tok_label(tok)}")
                     btn_add_comp.connect("clicked", on_add_comp)
                     pop_box.append(btn_add_comp)
@@ -3362,10 +4287,10 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                         popover.popdown()
                         self.channel_inserts[idx]["eq"] = True
                         self.channel_inserts[idx]["comp"] = True
-                        if hasattr(self, "sw_dsp_enable"):
-                            self.sw_dsp_enable.set_active(True)
+                        if hasattr(self, "sw_dsp"):
+                            self.sw_dsp.set_active(True)
                         refresh_insert_slots()
-                        self.open_dsp_channel(idx)
+                        self.open_channel_eq_window(idx, tok)
                         self.toast(f"Added EQ and Compressor to {tok_label(tok)}")
                     btn_add_both.connect("clicked", on_add_both)
                     pop_box.append(btn_add_both)
@@ -3396,8 +4321,8 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         btn_fx = Gtk.Button(label="FX")
         btn_fx.add_css_class("btn-fx")
         btn_fx.add_css_class("btn-compact")
-        btn_fx.set_tooltip_text(f"Open DSP Studio for {tok_label(tok)}")
-        btn_fx.connect("clicked", lambda _, i=idx: self.open_dsp_channel(i))
+        btn_fx.set_tooltip_text(f"Open Parametric EQ for {tok_label(tok)}")
+        btn_fx.connect("clicked", lambda _, i=idx, t=tok: self.open_channel_eq_window(i, t))
 
         btn_box.append(btn_mute)
         btn_box.append(btn_solo)
@@ -3422,695 +4347,9 @@ class MotuGuiWindow(Adw.ApplicationWindow):
 
         return box, scale, btn_solo, ch_data
 
-    def build_dsp_tab(self):
-        self._eq_updating = False
-        self._eq_controls = []
-        self._comp_updating = False
-        self._comp_controls = {}
-
-        page_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0, vexpand=True, hexpand=True)
-
-        # 1. Studio Top Ribbon (Channel Stepper, DSP HW Mode, View Mode, Engine Badge)
-        ribbon = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        ribbon.add_css_class("mixer-ribbon")
-
-        lbl_ch_nav = Gtk.Label(label="CHANNEL:")
-        lbl_ch_nav.add_css_class("strip-cap")
-        ribbon.append(lbl_ch_nav)
-
-        btn_prev_ch = Gtk.Button(icon_name="go-previous-symbolic")
-        btn_prev_ch.add_css_class("dsp-nav-btn")
-        btn_prev_ch.set_tooltip_text("Previous channel")
-
-        self.dsp_channel_tokens = [f"A Analog {i:02d}" for i in range(24)] + ["A AES 00", "A AES 01"]
-        self.dsp_channel_names = [f"Ch {i+1:02d}: {self.get_channel_display_name(t)}" for i, t in enumerate(self.dsp_channel_tokens)]
-        self.dd_dsp_ch = Gtk.DropDown.new_from_strings(self.dsp_channel_names)
-        self.dd_dsp_ch.set_valign(Gtk.Align.CENTER)
-
-        btn_next_ch = Gtk.Button(icon_name="go-next-symbolic")
-        btn_next_ch.add_css_class("dsp-nav-btn")
-        btn_next_ch.set_tooltip_text("Next channel")
-
-        def step_ch(delta):
-            cur = self.dd_dsp_ch.get_selected()
-            new_idx = max(0, min(len(self.dsp_channel_names) - 1, cur + delta))
-            if new_idx != cur:
-                self.dd_dsp_ch.set_selected(new_idx)
-
-        btn_prev_ch.connect("clicked", lambda _: step_ch(-1))
-        btn_next_ch.connect("clicked", lambda _: step_ch(1))
-        self.dd_dsp_ch.connect("notify::selected", lambda d, _p: self.toast(f"Inspecting DSP: {self.dsp_channel_names[d.get_selected()]}"))
-
-        ribbon.append(btn_prev_ch)
-        ribbon.append(self.dd_dsp_ch)
-        ribbon.append(btn_next_ch)
-
-        sep_r1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep_r1.set_margin_start(4)
-        sep_r1.set_margin_end(4)
-        ribbon.append(sep_r1)
-
-        # Hardware DSP Master Engine Toggle
-        lbl_dsp_hw = Gtk.Label(label="Hardware DSP:")
-        lbl_dsp_hw.add_css_class("strip-cap")
-        self.sw_dsp_enable = Gtk.Switch(active=False, valign=Gtk.Align.CENTER)
-
-        def _on_sw_dsp_enable_toggled(_s, v):
-            if hasattr(self, "sw_dsp") and self.sw_dsp.get_active() != v:
-                self.sw_dsp.set_active(v)
-            if v:
-                self.badge_dsp.set_label("32-BIT DSP CORE • ZERO LATENCY")
-                self.badge_dsp.remove_css_class("aes")
-                self.badge_dsp.add_css_class("analog")
-                if hasattr(self, "row_dsp_stat"):
-                    self.row_dsp_stat.set_subtitle("Online • ARM SoC running, Virtex FPGA matrix ready")
-            else:
-                self.badge_dsp.set_label("DSP: OFF (PASS-THROUGH)")
-                self.badge_dsp.remove_css_class("analog")
-                self.badge_dsp.add_css_class("aes")
-                if hasattr(self, "row_dsp_stat"):
-                    self.row_dsp_stat.set_subtitle("Off • Pass-Through mode (Hardware DSP disabled by default)")
-            self.toast(f"CueMix DSP: {'Hardware Active' if v else 'Pass-Through (Off by default)'}")
-            return False
-
-        self.sw_dsp_enable.connect("state-set", _on_sw_dsp_enable_toggled)
-        ribbon.append(lbl_dsp_hw)
-        ribbon.append(self.sw_dsp_enable)
-
-        sep_r2 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep_r2.set_margin_start(4)
-        sep_r2.set_margin_end(4)
-        ribbon.append(sep_r2)
-
-        # View Mode Segmented Switcher
-        lbl_view = Gtk.Label(label="View:")
-        lbl_view.add_css_class("strip-cap")
-        ribbon.append(lbl_view)
-
-        self.btn_mode_dual = Gtk.ToggleButton(label="Dual Strip (EQ + Dyn)", active=True)
-        self.btn_mode_dual.add_css_class("ribbon-btn")
-        self.btn_mode_dual.add_css_class("filter-btn")
-        self.btn_mode_dual.set_tooltip_text("Show Parametric EQ and Dynamics side-by-side on screen")
-
-        self.btn_mode_eq = Gtk.ToggleButton(label="Equalizer")
-        self.btn_mode_eq.add_css_class("ribbon-btn")
-        self.btn_mode_eq.add_css_class("filter-btn")
-        self.btn_mode_eq.set_tooltip_text("Focus full width on Visual Parametric EQ")
-        self.btn_mode_eq.set_group(self.btn_mode_dual)
-
-        self.btn_mode_dyn = Gtk.ToggleButton(label="Dynamics")
-        self.btn_mode_dyn.add_css_class("ribbon-btn")
-        self.btn_mode_dyn.add_css_class("filter-btn")
-        self.btn_mode_dyn.set_tooltip_text("Focus full width on Visual Compressor / Dynamics")
-        self.btn_mode_dyn.set_group(self.btn_mode_dual)
-
-        ribbon.append(self.btn_mode_dual)
-        ribbon.append(self.btn_mode_eq)
-        ribbon.append(self.btn_mode_dyn)
-
-        sp_r = Gtk.Box(hexpand=True)
-        ribbon.append(sp_r)
-
-        self.badge_dsp = Gtk.Label(label="DSP: OFF (PASS-THROUGH)")
-        self.badge_dsp.add_css_class("bank-badge")
-        self.badge_dsp.add_css_class("aes")
-        ribbon.append(self.badge_dsp)
-
-        page_vbox.append(ribbon)
-
-        # 2. Main Processors Area (Two Columns in Scrolled Window)
-        scrolled = Gtk.ScrolledWindow(hexpand=True, vexpand=True)
-        scrolled.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
-        page_vbox.append(scrolled)
-
-        box_content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=8, margin_bottom=16, margin_start=12, margin_end=12, hexpand=True, vexpand=True)
-        scrolled.set_child(box_content)
-
-        box_cols = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14, hexpand=True, vexpand=True)
-        box_content.append(box_cols)
-
-        self.col_eq = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, hexpand=True, vexpand=True)
-        self.sep_col = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        self.col_dyn = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, hexpand=True, vexpand=True)
-
-        box_cols.append(self.col_eq)
-        box_cols.append(self.sep_col)
-        box_cols.append(self.col_dyn)
-
-        def on_view_toggled(_b):
-            if self.btn_mode_dual.get_active():
-                self.col_eq.set_visible(True)
-                self.sep_col.set_visible(True)
-                self.col_dyn.set_visible(True)
-            elif self.btn_mode_eq.get_active():
-                self.col_eq.set_visible(True)
-                self.sep_col.set_visible(False)
-                self.col_dyn.set_visible(False)
-            elif self.btn_mode_dyn.get_active():
-                self.col_eq.set_visible(False)
-                self.sep_col.set_visible(False)
-                self.col_dyn.set_visible(True)
-
-        self.btn_mode_dual.connect("toggled", on_view_toggled)
-        self.btn_mode_eq.connect("toggled", on_view_toggled)
-        self.btn_mode_dyn.connect("toggled", on_view_toggled)
-
-        # -------------------------------------------------------------
-        # LEFT COLUMN: Visual Parametric Equalizer
-        # -------------------------------------------------------------
-        hdr_eq = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        badge_eq = Gtk.Label(label=" EQUALIZER ")
-        badge_eq.add_css_class("bank-badge")
-        badge_eq.add_css_class("analog")
-        lbl_eq_title = Gtk.Label(label="Precision 7-Band Parametric EQ (Biquad Filter Curves)", hexpand=True, halign=Gtk.Align.START)
-        lbl_eq_title.add_css_class("strip-title")
-        hdr_eq.append(badge_eq)
-        hdr_eq.append(lbl_eq_title)
-        self.col_eq.append(hdr_eq)
-
-        # EQ Control Toolbar (Bypass switch, Presets dropdown, Flat reset button)
-        tb_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        tb_box.add_css_class("eq-toolbar")
-
-        lbl_eq_pwr = Gtk.Label(label="EQ Active", valign=Gtk.Align.CENTER)
-        lbl_eq_pwr.add_css_class("strip-title")
-        sw_eq_master = Gtk.Switch(active=True, valign=Gtk.Align.CENTER)
-        sw_eq_master.connect("state-set", lambda _s, v: self.visual_eq.set_bypass(not v))
-        tb_box.append(lbl_eq_pwr)
-        tb_box.append(sw_eq_master)
-
-        sep_eq_t = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep_eq_t.set_margin_start(4)
-        sep_eq_t.set_margin_end(4)
-        tb_box.append(sep_eq_t)
-
-        lbl_preset = Gtk.Label(label="Preset:", valign=Gtk.Align.CENTER)
-        lbl_preset.add_css_class("strip-cap")
-        tb_box.append(lbl_preset)
-
-        preset_keys = list(VisualEQ.PRESETS.keys())
-        preset_names = [VisualEQ.PRESETS[k]["name"] for k in preset_keys]
-        dd_presets = Gtk.DropDown.new_from_strings(preset_names)
-        dd_presets.set_valign(Gtk.Align.CENTER)
-        dd_presets.connect("notify::selected", lambda d, _p: self._apply_eq_preset(preset_keys[d.get_selected()]))
-        tb_box.append(dd_presets)
-
-        sp_tb = Gtk.Box(hexpand=True)
-        tb_box.append(sp_tb)
-
-        btn_flat = Gtk.Button(label="Zero All (Flat)")
-        btn_flat.add_css_class("ribbon-btn")
-        btn_flat.set_valign(Gtk.Align.CENTER)
-        btn_flat.connect("clicked", lambda _: (dd_presets.set_selected(0), self._reset_eq_flat()))
-        tb_box.append(btn_flat)
-
-        self.col_eq.append(tb_box)
-
-        # Visual EQ Canvas Area
-        box_canvas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box_canvas.add_css_class("visual-eq-box")
-        self.visual_eq = VisualEQ(on_band_changed=self._on_eq_visual_changed)
-        box_canvas.append(self.visual_eq)
-        self.col_eq.append(box_canvas)
-
-        # Band Parameter Cards
-        bands_meta = [
-            ("HPF", "High-Pass Filter", "hpf", (0.20, 0.82, 0.95), 20, 500, 80, None, None),
-            ("LF", "Low Shelf Filter", "low_shelf", (0.28, 0.58, 0.98), 20, 1000, 100, -18, 18),
-            ("LM", "Low-Mid Parametric", "peak", (0.22, 0.85, 0.48), 80, 4000, 400, -18, 18),
-            ("HM", "High-Mid Parametric", "peak", (0.98, 0.72, 0.15), 400, 12000, 2500, -18, 18),
-            ("HF", "High Shelf Filter", "high_shelf", (0.85, 0.38, 0.85), 1500, 20000, 8000, -18, 18)
-        ]
-
-        for idx, (tag, title, kind, color, f_min, f_max, f_def, g_min, g_max) in enumerate(bands_meta):
-            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-            card.add_css_class("eq-band-card")
-
-            hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            lbl_tag = Gtk.Label(label=f" {tag} ")
-            lbl_tag.add_css_class("bank-badge")
-            if kind == "hpf":
-                lbl_tag.add_css_class("analog")
-            elif kind == "low_shelf":
-                lbl_tag.add_css_class("analog")
-            elif kind == "peak":
-                lbl_tag.add_css_class("adat")
-            else:
-                lbl_tag.add_css_class("aes")
-            hdr.append(lbl_tag)
-
-            lbl_title = Gtk.Label(label=title, hexpand=True, halign=Gtk.Align.START)
-            lbl_title.add_css_class("strip-title")
-            hdr.append(lbl_title)
-
-            sw_en = Gtk.Switch(active=(idx > 0), valign=Gtk.Align.CENTER)
-            sw_en.connect("state-set", lambda _s, _v, i=idx: self._on_eq_slider_changed(i))
-            hdr.append(sw_en)
-            card.append(hdr)
-
-            ctrls_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-
-            # Frequency slider
-            freq_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-            lbl_f_tag = Gtk.Label(label="Freq:", halign=Gtk.Align.START)
-            lbl_f_tag.add_css_class("strip-cap")
-            sc_freq = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, f_min, f_max, 1)
-            sc_freq.set_value(f_def)
-            sc_freq.set_hexpand(True)
-            f_str = f"{f_def} Hz" if f_def < 1000 else f"{f_def/1000:.1f} kHz"
-            lbl_f_val = Gtk.Label(label=f_str)
-            lbl_f_val.add_css_class("strip-val")
-            lbl_f_val.set_size_request(60, -1)
-            sc_freq.connect("value-changed", lambda _s, i=idx: self._on_eq_slider_changed(i))
-            freq_box.append(lbl_f_tag)
-            freq_box.append(sc_freq)
-            freq_box.append(lbl_f_val)
-            ctrls_box.append(freq_box)
-
-            band_dict = {
-                "sw_en": sw_en,
-                "sc_freq": sc_freq,
-                "lbl_freq": lbl_f_val
-            }
-
-            # Gain slider (for bands other than HPF)
-            if g_min is not None:
-                gain_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-                lbl_g_tag = Gtk.Label(label="Gain:", halign=Gtk.Align.START)
-                lbl_g_tag.add_css_class("strip-cap")
-                sc_gain = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, g_min, g_max, 0.5)
-                sc_gain.set_value(0.0)
-                sc_gain.set_hexpand(True)
-                lbl_g_val = Gtk.Label(label="+0.0 dB")
-                lbl_g_val.add_css_class("strip-val")
-                lbl_g_val.set_size_request(60, -1)
-                sc_gain.connect("value-changed", lambda _s, i=idx: self._on_eq_slider_changed(i))
-
-                btn_zero = Gtk.Button(label="0 dB")
-                btn_zero.add_css_class("ribbon-btn")
-                btn_zero.connect("clicked", lambda _b, s=sc_gain: s.set_value(0.0))
-
-                gain_box.append(lbl_g_tag)
-                gain_box.append(sc_gain)
-                gain_box.append(lbl_g_val)
-                gain_box.append(btn_zero)
-                ctrls_box.append(gain_box)
-
-                band_dict["sc_gain"] = sc_gain
-                band_dict["lbl_gain"] = lbl_g_val
-
-            # Q Bandwidth slider (for peak bands)
-            if kind == "peak":
-                q_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-                lbl_q_tag = Gtk.Label(label="Q:", halign=Gtk.Align.START)
-                lbl_q_tag.add_css_class("strip-cap")
-                q_def = 1.0 if idx == 2 else 1.4
-                sc_q = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.4, 6.0, 0.1)
-                sc_q.set_value(q_def)
-                sc_q.set_size_request(80, -1)
-                lbl_q_val = Gtk.Label(label=f"Q: {q_def:.1f}")
-                lbl_q_val.add_css_class("strip-val")
-                lbl_q_val.set_size_request(50, -1)
-                sc_q.connect("value-changed", lambda _s, i=idx: self._on_eq_slider_changed(i))
-                q_box.append(lbl_q_tag)
-                q_box.append(sc_q)
-                q_box.append(lbl_q_val)
-                ctrls_box.append(q_box)
-
-                band_dict["sc_q"] = sc_q
-                band_dict["lbl_q"] = lbl_q_val
-
-            card.append(ctrls_box)
-            self.col_eq.append(card)
-            self._eq_controls.append(band_dict)
-
-        # -------------------------------------------------------------
-        # RIGHT COLUMN: Visual Dynamics Processor (Compressor)
-        # -------------------------------------------------------------
-        hdr_dyn = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        badge_dyn = Gtk.Label(label=" DYNAMICS ")
-        badge_dyn.add_css_class("bank-badge")
-        badge_dyn.add_css_class("adat")
-        lbl_dyn_title = Gtk.Label(label="Hardware Dynamics Processor (Knee Compressor & GR Meter)", hexpand=True, halign=Gtk.Align.START)
-        lbl_dyn_title.add_css_class("strip-title")
-        hdr_dyn.append(badge_dyn)
-        hdr_dyn.append(lbl_dyn_title)
-        self.col_dyn.append(hdr_dyn)
-
-        tb_dyn = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        tb_dyn.add_css_class("eq-toolbar")
-
-        lbl_dyn_pwr = Gtk.Label(label="Comp Active", valign=Gtk.Align.CENTER)
-        lbl_dyn_pwr.add_css_class("strip-title")
-        sw_dyn_master = Gtk.Switch(active=True, valign=Gtk.Align.CENTER)
-        sw_dyn_master.connect("state-set", lambda _s, v: (self.visual_dyn.set_params_silent(enabled=v), self.toast(f"Compressor: {'Active' if v else 'Bypassed'}")))
-        tb_dyn.append(lbl_dyn_pwr)
-        tb_dyn.append(sw_dyn_master)
-
-        sep_d1 = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
-        sep_d1.set_margin_start(4)
-        sep_d1.set_margin_end(4)
-        tb_dyn.append(sep_d1)
-
-        lbl_dyn_preset = Gtk.Label(label="Preset:", valign=Gtk.Align.CENTER)
-        lbl_dyn_preset.add_css_class("strip-cap")
-        tb_dyn.append(lbl_dyn_preset)
-
-        dyn_preset_keys = list(VisualDynamics.PRESETS.keys())
-        dyn_preset_names = [VisualDynamics.PRESETS[k]["name"] for k in dyn_preset_keys]
-        dd_dyn_presets = Gtk.DropDown.new_from_strings(dyn_preset_names)
-        dd_dyn_presets.set_valign(Gtk.Align.CENTER)
-        dd_dyn_presets.connect("notify::selected", lambda d, _p: self._apply_comp_preset(dyn_preset_keys[d.get_selected()]))
-        tb_dyn.append(dd_dyn_presets)
-
-        sp_dyn_tb = Gtk.Box(hexpand=True)
-        tb_dyn.append(sp_dyn_tb)
-
-        btn_dyn_reset = Gtk.Button(label="Reset (Default)")
-        btn_dyn_reset.add_css_class("ribbon-btn")
-        btn_dyn_reset.set_valign(Gtk.Align.CENTER)
-        btn_dyn_reset.connect("clicked", lambda _: (dd_dyn_presets.set_selected(0), self._apply_comp_preset("vocal")))
-        tb_dyn.append(btn_dyn_reset)
-
-        self.col_dyn.append(tb_dyn)
-
-        box_dyn_canvas = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        box_dyn_canvas.add_css_class("visual-eq-box")
-        self.visual_dyn = VisualDynamics(on_params_changed=self._on_comp_visual_changed)
-        box_dyn_canvas.append(self.visual_dyn)
-        self.col_dyn.append(box_dyn_canvas)
-
-        # Card 1: Threshold & Knee Transition
-        card_th = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        card_th.add_css_class("eq-band-card")
-        hdr_th = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        tag_th = Gtk.Label(label=" THRESH ")
-        tag_th.add_css_class("bank-badge")
-        tag_th.add_css_class("analog")
-        hdr_th.append(tag_th)
-        lbl_th_title = Gtk.Label(label="Threshold & Knee Transition", hexpand=True, halign=Gtk.Align.START)
-        lbl_th_title.add_css_class("strip-title")
-        hdr_th.append(lbl_th_title)
-        card_th.append(hdr_th)
-
-        row_th_ctrls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-
-        th_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        lbl_th_tag = Gtk.Label(label="Threshold:", halign=Gtk.Align.START)
-        lbl_th_tag.add_css_class("strip-cap")
-        sc_th = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, -45.0, 0.0, 0.5)
-        sc_th.set_value(-16.0)
-        sc_th.set_hexpand(True)
-        lbl_th_val = Gtk.Label(label="-16.0 dB")
-        lbl_th_val.add_css_class("strip-val")
-        lbl_th_val.set_size_request(60, -1)
-        sc_th.connect("value-changed", lambda _s: self._on_comp_slider_changed())
-        btn_th_reset = Gtk.Button(label="-16 dB")
-        btn_th_reset.add_css_class("ribbon-btn")
-        btn_th_reset.connect("clicked", lambda _b: sc_th.set_value(-16.0))
-        th_box.append(lbl_th_tag)
-        th_box.append(sc_th)
-        th_box.append(lbl_th_val)
-        th_box.append(btn_th_reset)
-        row_th_ctrls.append(th_box)
-
-        knee_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        lbl_knee_tag = Gtk.Label(label="Knee:", halign=Gtk.Align.START)
-        lbl_knee_tag.add_css_class("strip-cap")
-        sc_knee = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 12.0, 0.5)
-        sc_knee.set_value(6.0)
-        sc_knee.set_size_request(100, -1)
-        lbl_knee_val = Gtk.Label(label="6.0 dB")
-        lbl_knee_val.add_css_class("strip-val")
-        lbl_knee_val.set_size_request(50, -1)
-        sc_knee.connect("value-changed", lambda _s: self._on_comp_slider_changed())
-        knee_box.append(lbl_knee_tag)
-        knee_box.append(sc_knee)
-        knee_box.append(lbl_knee_val)
-        row_th_ctrls.append(knee_box)
-
-        card_th.append(row_th_ctrls)
-        self.col_dyn.append(card_th)
-
-        # Card 2: Compression Ratio & Makeup Gain
-        card_r = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        card_r.add_css_class("eq-band-card")
-        hdr_r = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        tag_r = Gtk.Label(label=" RATIO ")
-        tag_r.add_css_class("bank-badge")
-        tag_r.add_css_class("adat")
-        hdr_r.append(tag_r)
-        lbl_r_title = Gtk.Label(label="Compression Ratio & Output Makeup Gain", hexpand=True, halign=Gtk.Align.START)
-        lbl_r_title.add_css_class("strip-title")
-        hdr_r.append(lbl_r_title)
-        card_r.append(hdr_r)
-
-        row_r_ctrls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-
-        r_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        lbl_r_tag = Gtk.Label(label="Ratio:", halign=Gtk.Align.START)
-        lbl_r_tag.add_css_class("strip-cap")
-        sc_r = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 1.0, 20.0, 0.1)
-        sc_r.set_value(4.0)
-        sc_r.set_hexpand(True)
-        lbl_r_val = Gtk.Label(label="4.0 : 1")
-        lbl_r_val.add_css_class("strip-val")
-        lbl_r_val.set_size_request(60, -1)
-        sc_r.connect("value-changed", lambda _s: self._on_comp_slider_changed())
-        btn_r_reset = Gtk.Button(label="4:1")
-        btn_r_reset.add_css_class("ribbon-btn")
-        btn_r_reset.connect("clicked", lambda _b: sc_r.set_value(4.0))
-        r_box.append(lbl_r_tag)
-        r_box.append(sc_r)
-        r_box.append(lbl_r_val)
-        r_box.append(btn_r_reset)
-        row_r_ctrls.append(r_box)
-
-        mu_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        lbl_mu_tag = Gtk.Label(label="Makeup:", halign=Gtk.Align.START)
-        lbl_mu_tag.add_css_class("strip-cap")
-        sc_mu = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.0, 24.0, 0.5)
-        sc_mu.set_value(0.0)
-        sc_mu.set_size_request(100, -1)
-        lbl_mu_val = Gtk.Label(label="+0.0 dB")
-        lbl_mu_val.add_css_class("strip-val")
-        lbl_mu_val.set_size_request(55, -1)
-        sc_mu.connect("value-changed", lambda _s: self._on_comp_slider_changed())
-        btn_mu_reset = Gtk.Button(label="0 dB")
-        btn_mu_reset.add_css_class("ribbon-btn")
-        btn_mu_reset.connect("clicked", lambda _b: sc_mu.set_value(0.0))
-        mu_box.append(lbl_mu_tag)
-        mu_box.append(sc_mu)
-        mu_box.append(lbl_mu_val)
-        mu_box.append(btn_mu_reset)
-        row_r_ctrls.append(mu_box)
-
-        card_r.append(row_r_ctrls)
-        self.col_dyn.append(card_r)
-
-        # Card 3: Dynamic Timing (Attack & Release)
-        card_t = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        card_t.add_css_class("eq-band-card")
-        hdr_t = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        tag_t = Gtk.Label(label=" TIMING ")
-        tag_t.add_css_class("bank-badge")
-        tag_t.add_css_class("aes")
-        hdr_t.append(tag_t)
-        lbl_t_title = Gtk.Label(label="Ballistics (Envelope Attack & Release)", hexpand=True, halign=Gtk.Align.START)
-        lbl_t_title.add_css_class("strip-title")
-        hdr_t.append(lbl_t_title)
-        card_t.append(hdr_t)
-
-        row_t_ctrls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-
-        att_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        lbl_att_tag = Gtk.Label(label="Attack:", halign=Gtk.Align.START)
-        lbl_att_tag.add_css_class("strip-cap")
-        sc_att = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.1, 100.0, 0.5)
-        sc_att.set_value(10.0)
-        sc_att.set_hexpand(True)
-        lbl_att_val = Gtk.Label(label="10.0 ms")
-        lbl_att_val.add_css_class("strip-val")
-        lbl_att_val.set_size_request(60, -1)
-        sc_att.connect("value-changed", lambda _s: self._on_comp_slider_changed())
-        att_box.append(lbl_att_tag)
-        att_box.append(sc_att)
-        att_box.append(lbl_att_val)
-        row_t_ctrls.append(att_box)
-
-        rel_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        lbl_rel_tag = Gtk.Label(label="Release:", halign=Gtk.Align.START)
-        lbl_rel_tag.add_css_class("strip-cap")
-        sc_rel = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 10.0, 1000.0, 5.0)
-        sc_rel.set_value(200.0)
-        sc_rel.set_hexpand(True)
-        lbl_rel_val = Gtk.Label(label="200 ms")
-        lbl_rel_val.add_css_class("strip-val")
-        lbl_rel_val.set_size_request(55, -1)
-        sc_rel.connect("value-changed", lambda _s: self._on_comp_slider_changed())
-        rel_box.append(lbl_rel_tag)
-        rel_box.append(sc_rel)
-        rel_box.append(lbl_rel_val)
-        row_t_ctrls.append(rel_box)
-
-        card_t.append(row_t_ctrls)
-        self.col_dyn.append(card_t)
-
-        self._comp_controls = {
-            "sw_active": sw_dyn_master,
-            "sc_th": sc_th, "lbl_th": lbl_th_val,
-            "sc_knee": sc_knee, "lbl_knee": lbl_knee_val,
-            "sc_r": sc_r, "lbl_r": lbl_r_val,
-            "sc_mu": sc_mu, "lbl_mu": lbl_mu_val,
-            "sc_att": sc_att, "lbl_att": lbl_att_val,
-            "sc_rel": sc_rel, "lbl_rel": lbl_rel_val
-        }
-
-        return page_vbox
-
-    def _on_eq_visual_changed(self, band_idx, band):
-        if getattr(self, "_eq_updating", False) or band_idx >= len(self._eq_controls):
-            return
-        self._eq_updating = True
-        try:
-            ctrls = self._eq_controls[band_idx]
-            ctrls["sw_en"].set_active(band.enabled)
-            ctrls["sc_freq"].set_value(band.freq)
-            freq_str = f"{int(band.freq)} Hz" if band.freq < 1000 else f"{band.freq/1000:.1f} kHz"
-            ctrls["lbl_freq"].set_text(freq_str)
-            if "sc_gain" in ctrls:
-                ctrls["sc_gain"].set_value(band.gain)
-                ctrls["lbl_gain"].set_text(f"{band.gain:+.1f} dB")
-            if "sc_q" in ctrls:
-                ctrls["sc_q"].set_value(band.q)
-                ctrls["lbl_q"].set_text(f"Q: {band.q:.1f}")
-        finally:
-            self._eq_updating = False
-
-    def _on_eq_slider_changed(self, band_idx):
-        if getattr(self, "_eq_updating", False) or band_idx >= len(self._eq_controls):
-            return
-        self._eq_updating = True
-        try:
-            ctrls = self._eq_controls[band_idx]
-            en = ctrls["sw_en"].get_active()
-            freq = ctrls["sc_freq"].get_value()
-            gain = ctrls["sc_gain"].get_value() if "sc_gain" in ctrls else 0.0
-            q = ctrls["sc_q"].get_value() if "sc_q" in ctrls else 0.707
-
-            freq_str = f"{int(freq)} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
-            ctrls["lbl_freq"].set_text(freq_str)
-            if "lbl_gain" in ctrls:
-                ctrls["lbl_gain"].set_text(f"{gain:+.1f} dB")
-            if "lbl_q" in ctrls:
-                ctrls["lbl_q"].set_text(f"Q: {q:.1f}")
-
-            self.visual_eq.set_band_silent(band_idx, freq=freq, gain=gain, q=q, enabled=en)
-        finally:
-            self._eq_updating = False
-
-    def _apply_eq_preset(self, preset_key):
-        preset = VisualEQ.PRESETS.get(preset_key)
-        if not preset or len(self._eq_controls) < 5:
-            return
-        self._eq_updating = True
-        try:
-            for idx, (en, freq, gain, q) in enumerate(preset["bands"]):
-                ctrls = self._eq_controls[idx]
-                ctrls["sw_en"].set_active(en)
-                ctrls["sc_freq"].set_value(freq)
-                freq_str = f"{int(freq)} Hz" if freq < 1000 else f"{freq/1000:.1f} kHz"
-                ctrls["lbl_freq"].set_text(freq_str)
-                if "sc_gain" in ctrls:
-                    ctrls["sc_gain"].set_value(gain)
-                    ctrls["lbl_gain"].set_text(f"{gain:+.1f} dB")
-                if "sc_q" in ctrls:
-                    ctrls["sc_q"].set_value(q)
-                    ctrls["lbl_q"].set_text(f"Q: {q:.1f}")
-                self.visual_eq.set_band_silent(idx, freq=freq, gain=gain, q=q, enabled=en)
-        finally:
-            self._eq_updating = False
-        self.toast(f"Loaded EQ Preset: {preset['name']}")
-
-    def _reset_eq_flat(self):
-        self._apply_eq_preset("flat")
-
-    def _on_comp_visual_changed(self, threshold, ratio, attack, release, makeup, knee):
-        if getattr(self, "_comp_updating", False) or not self._comp_controls:
-            return
-        self._comp_updating = True
-        try:
-            ctrls = self._comp_controls
-            ctrls["sc_th"].set_value(threshold)
-            ctrls["lbl_th"].set_text(f"{threshold:+.1f} dB")
-            ctrls["sc_r"].set_value(ratio)
-            ctrls["lbl_r"].set_text(f"{ratio:.1f} : 1")
-            ctrls["sc_mu"].set_value(makeup)
-            ctrls["lbl_mu"].set_text(f"{makeup:+.1f} dB")
-            ctrls["sc_knee"].set_value(knee)
-            ctrls["lbl_knee"].set_text(f"{knee:.1f} dB")
-        finally:
-            self._comp_updating = False
-
-    def _on_comp_slider_changed(self):
-        if getattr(self, "_comp_updating", False) or not self._comp_controls:
-            return
-        self._comp_updating = True
-        try:
-            ctrls = self._comp_controls
-            th = ctrls["sc_th"].get_value()
-            r = ctrls["sc_r"].get_value()
-            knee = ctrls["sc_knee"].get_value()
-            mu = ctrls["sc_mu"].get_value()
-            att = ctrls["sc_att"].get_value()
-            rel = ctrls["sc_rel"].get_value()
-
-            ctrls["lbl_th"].set_text(f"{th:+.1f} dB")
-            ctrls["lbl_r"].set_text(f"{r:.1f} : 1")
-            ctrls["lbl_knee"].set_text(f"{knee:.1f} dB")
-            ctrls["lbl_mu"].set_text(f"{mu:+.1f} dB")
-            ctrls["lbl_att"].set_text(f"{att:.1f} ms")
-            ctrls["lbl_rel"].set_text(f"{int(rel)} ms")
-
-            self.visual_dyn.set_params_silent(threshold=th, ratio=r, attack=att, release=rel, makeup=mu, knee=knee)
-        finally:
-            self._comp_updating = False
-
-    def _apply_comp_preset(self, preset_key):
-        preset = VisualDynamics.PRESETS.get(preset_key)
-        if not preset or not self._comp_controls:
-            return
-        self._comp_updating = True
-        try:
-            ctrls = self._comp_controls
-            th = preset["threshold"]
-            r = preset["ratio"]
-            att = preset["attack"]
-            rel = preset["release"]
-            mu = preset["makeup"]
-            knee = preset["knee"]
-
-            ctrls["sc_th"].set_value(th)
-            ctrls["lbl_th"].set_text(f"{th:+.1f} dB")
-            ctrls["sc_r"].set_value(r)
-            ctrls["lbl_r"].set_text(f"{r:.1f} : 1")
-            ctrls["sc_knee"].set_value(knee)
-            ctrls["lbl_knee"].set_text(f"{knee:.1f} dB")
-            ctrls["sc_mu"].set_value(mu)
-            ctrls["lbl_mu"].set_text(f"{mu:+.1f} dB")
-            ctrls["sc_att"].set_value(att)
-            ctrls["lbl_att"].set_text(f"{att:.1f} ms")
-            ctrls["sc_rel"].set_value(rel)
-            ctrls["lbl_rel"].set_text(f"{int(rel)} ms")
-
-            self.visual_dyn.set_params_silent(threshold=th, ratio=r, attack=att, release=rel, makeup=mu, knee=knee)
-        finally:
-            self._comp_updating = False
-        self.toast(f"Loaded Dynamics Preset: {preset['name']}")
-
     # -------------------------------------------------------------------------
-    # TAB 3: I/O Routing & Clock Synchronization
-    # -------------------------------------------------------------------------
+    # TAB 2: I/O Routing & Clock Synchronization
+    # -----------------------------------------------------------------------------------------------------------------------------
     def build_routing_tab(self):
         vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True, hexpand=True)
         self.routing_nb = Gtk.Notebook(vexpand=True, hexpand=True)
@@ -4358,11 +4597,23 @@ class MotuGuiWindow(Adw.ApplicationWindow):
         if self.demo_mode:
             rig_titles = [INTERFACE_MODELS.get(r, {}).get("title", r.upper()) for r in DEMO_RIG]
             self.lbl_card_status.set_text(f"DEMO RIG: {' + '.join(rig_titles)} (Simulated)")
+            if hasattr(self, "lbl_status_hw") and self.lbl_status_hw:
+                self.lbl_status_hw.set_text("DEMO RIG: 24i")
+                self.lbl_status_hw.remove_css_class("status-pill-hw")
+                self.lbl_status_hw.add_css_class("status-pill-demo")
         elif cards:
             c = cards[0]
             self.lbl_card_status.set_text(f"HARDWARE: {c['model']} ({c['driver']})")
+            if hasattr(self, "lbl_status_hw") and self.lbl_status_hw:
+                self.lbl_status_hw.set_text(f"HW: {c['model']}")
+                self.lbl_status_hw.remove_css_class("status-pill-demo")
+                self.lbl_status_hw.add_css_class("status-pill-hw")
         else:
             self.lbl_card_status.set_text("NO CARD (Demo Simulation Active)")
+            if hasattr(self, "lbl_status_hw") and self.lbl_status_hw:
+                self.lbl_status_hw.set_text("NO CARD")
+                self.lbl_status_hw.remove_css_class("status-pill-hw")
+                self.lbl_status_hw.add_css_class("status-pill-demo")
         return True
 
     def refresh_all(self):
@@ -4382,7 +4633,7 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 self.card_rows.append(row)
         else:
             row = Adw.ActionRow(title="No MOTU card detected",
-                                subtitle="Insert MOTU PCI-324/424 or PCIe-424 card to begin hardware probing")
+                                 subtitle="Insert MOTU PCI-324/424 or PCIe-424 card to begin hardware probing")
             self.grp_card.add(row)
             self.card_rows.append(row)
 
@@ -4396,9 +4647,11 @@ class MotuGuiWindow(Adw.ApplicationWindow):
                 self.sw_dsp.set_active(dsp_active)
             if hasattr(self, "sw_dsp_enable"):
                 self.sw_dsp_enable.set_active(dsp_active)
+            self._update_dsp_status_pill(dsp_active)
         else:
             self.row_mod_state.set_title("Driver Module: Not Loaded")
             self.row_mod_state.set_subtitle("Load motu424.ko after card is detected (DSP: Off by default)")
+            self._update_dsp_status_pill(False)
 
         self._refresh_diag()
         self._refresh_dmesg()

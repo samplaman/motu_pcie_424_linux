@@ -34,6 +34,10 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#if (defined(__i386__) || defined(__x86_64__)) && defined(__linux__)
+#include <sys/io.h>
+#define HAVE_SYS_IO 1
+#endif
 
 #define MOTU_VENDOR 0x137A	/* Mark of the Unicorn (confirmed, MOTUAW.inf) */
 #define SYS_PCI     "/sys/bus/pci/devices"
@@ -44,7 +48,9 @@
 #define RES_IO      0x00000100ul
 #define RES_MEM     0x00000200ul
 
-/* Window masks + the confirmed window-B bank ctrl/status card offsets. */
+/* Window masks + the confirmed bank ctrl/status card offsets. */
+#define WINA_TAG    0x01800000ul
+#define WINA_MASK   0x007ffffful
 #define WINB_MASK   0x003ffffful
 #define BANK0_CTRL  0x000c0024ul
 #define BANK1_CTRL  0x00100024ul
@@ -147,11 +153,33 @@ static void hexdump(volatile uint32_t *base, uint64_t card_off, size_t len)
 	}
 }
 
-/* Dump the head of a BAR plus, for window B, the known bank ctrl/status regs. */
+/* Dump the head of a BAR plus, for windows A/B, the known bank ctrl/status regs. */
 static void dump_bar(const char *dir, int idx, const struct bar *b)
 {
 	volatile uint32_t *p;
 	size_t len;
+
+	if (b->flags & RES_IO) {
+#ifdef HAVE_SYS_IO
+		if (iopl(3) == 0) {
+			uint32_t p0 = inl(b->start + 0);
+			uint32_t p4 = inl(b->start + 4);
+			uint32_t p8 = inl(b->start + 8);
+			uint32_t pc = inl(b->start + 12);
+			printf("    ports @ 0x%04" PRIx64 ":\n", b->start);
+			printf("      +0x0 (status/ctrl) = 0x%08x  [irq_pending=%u, enable=%u]\n",
+			       p0, (p0 >> 1) & 1, (p0 >> 2) & 1);
+			printf("      +0x4 (strobe)      = 0x%08x\n", p4);
+			printf("      +0x8 (page/init)   = 0x%08x\n", p8);
+			printf("      +0xc (bridge/id)   = 0x%08x\n", pc);
+		} else {
+			perror("iopl (need root for port I/O)");
+		}
+#else
+		printf("    (port I/O access only supported on x86/x86_64)\n");
+#endif
+		return;
+	}
 
 	p = map_bar(dir, idx, b->size, 0, HEAD_BYTES, &len);
 	if (p) {
@@ -172,24 +200,48 @@ static void dump_bar(const char *dir, int idx, const struct bar *b)
 			       regs[i], p[(regs[i] & 0xfff) / 4]);
 			munmap((void *)p, len);
 		}
+	} else if ((b->flags & RES_MEM) && b->size >= 0x800000) {
+		uint64_t regs[] = { BANK0_CTRL & WINA_MASK, BANK1_CTRL & WINA_MASK };
+
+		for (size_t i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
+			p = map_bar(dir, idx, b->size, regs[i] & ~0xfffUL,
+				    0x1000, &len);
+			if (!p)
+				continue;
+			printf("    bank ctrl @ card 0x%08" PRIx64 " (win-A): %08x\n",
+			       WINA_TAG | regs[i], p[(regs[i] & 0xfff) / 4]);
+			munmap((void *)p, len);
+		}
 	}
 }
 
-/* Optional user-requested targeted window-B dump. */
+/* Optional user-requested targeted window A or B dump. */
 static void dump_target(const char *dir, const struct bar bars[PCI_NUM_BARS],
 			uint64_t card_off, size_t len)
 {
 	int idx = -1;
+	uint64_t off;
+	const char *wname;
 
-	for (int i = 0; i < PCI_NUM_BARS; i++)
-		if ((bars[i].flags & RES_MEM) && bars[i].size >= 0x200000 &&
-		    bars[i].size < 0x800000)
-			idx = i;
+	if ((card_off & 0xff800000ul) == WINA_TAG) {
+		wname = "window-A";
+		for (int i = 0; i < PCI_NUM_BARS; i++)
+			if ((bars[i].flags & RES_MEM) && bars[i].size >= 0x800000)
+				idx = i;
+		off = card_off & WINA_MASK;
+	} else {
+		wname = "window-B";
+		for (int i = 0; i < PCI_NUM_BARS; i++)
+			if ((bars[i].flags & RES_MEM) && bars[i].size >= 0x200000 &&
+			    bars[i].size < 0x800000)
+				idx = i;
+		off = card_off & WINB_MASK;
+	}
+
 	if (idx < 0) {
-		fprintf(stderr, "  no window-B BAR to target\n");
+		fprintf(stderr, "  no %s BAR to target\n", wname);
 		return;
 	}
-	uint64_t off = card_off & WINB_MASK;
 	uint64_t page = off & ~0xfffUL;
 	volatile uint32_t *p;
 	size_t got;
@@ -205,8 +257,8 @@ static void dump_target(const char *dir, const struct bar bars[PCI_NUM_BARS],
 	 */
 	if (len > got - (off - page))
 		len = got - (off - page);
-	printf("  window-B target @ card 0x%08" PRIx64 ", %zu bytes (BAR%d):\n",
-	       card_off, len, idx);
+	printf("  %s target @ card 0x%08" PRIx64 ", %zu bytes (BAR%d, off 0x%" PRIx64 "):\n",
+	       wname, card_off, len, idx, off);
 	hexdump(p + (off - page) / 4, card_off, len);
 	munmap((void *)p, got);
 }

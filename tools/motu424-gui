@@ -1998,39 +1998,113 @@ notebook > header > tabs > tab:checked {
     font-weight: bold;
     color: #8fa0b0;
 }
-/* Studio Faders */
+/* Studio Faders - Traditional Console Mixer Square Faders */
 scale.fader {
     padding: 0;
 }
 scale.fader trough {
-    background-color: #090b0e;
-    border: 1px solid #1a222c;
-    border-radius: 4px;
-    min-width: 6px;
-    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.7);
+    background-color: #040508;
+    border: 1px solid #141b24;
+    border-radius: 1px;
+    min-width: 5px;
+    box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.95);
 }
 scale.fader highlight {
     background-color: transparent;
 }
 scale.fader slider {
-    background: linear-gradient(180deg, #e4ecf2 0%, #a8b8c6 45%, #6a7c8c 55%, #b4c2ce 100%);
-    border: 1px solid #4a5866;
-    border-radius: 4px;
-    min-width: 24px;
-    min-height: 22px;
-    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.8), inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+    min-width: 26px;
+    min-height: 26px;
+    border-radius: 1px;
+    border: 1px solid #12171e;
+    background: linear-gradient(180deg,
+        #4e5968 0%,
+        #353f4d 14%,
+        #242c37 32%,
+        #151b22 44%,
+        #ffffff 45%,
+        #ffffff 55%,
+        #10141a 56%,
+        #1e2530 68%,
+        #2b3542 86%,
+        #181e26 100%
+    );
+    box-shadow: 
+        0 4px 8px rgba(0, 0, 0, 0.8),
+        0 1px 2px rgba(0, 0, 0, 0.95),
+        inset 0 1px 0 rgba(255, 255, 255, 0.35),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.85);
 }
 scale.fader slider:hover {
-    background: linear-gradient(180deg, #f0f6fa 0%, #b8c8d6 45%, #7a8c9c 55%, #c4d2de 100%);
-    border-color: #6a7888;
+    border-color: #3b82f6;
+    background: linear-gradient(180deg,
+        #5a6778 0%,
+        #414c5c 14%,
+        #2d3744 32%,
+        #1b232c 44%,
+        #ffffff 45%,
+        #ffffff 55%,
+        #151b22 56%,
+        #26303c 68%,
+        #35404f 86%,
+        #202732 100%
+    );
+    box-shadow: 
+        0 4px 10px rgba(0, 0, 0, 0.9),
+        0 0 6px rgba(59, 130, 246, 0.35),
+        inset 0 1px 0 rgba(255, 255, 255, 0.45),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.9);
 }
-.strip.master scale.fader slider {
-    background: linear-gradient(180deg, #ff6b6b 0%, #e03232 45%, #9e1a1a 55%, #d63838 100%);
-    border: 1px solid #751414;
-    box-shadow: 0 3px 8px rgba(224, 50, 50, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.6), inset 0 -1px 0 rgba(0, 0, 0, 0.4);
+scale.fader slider:active {
+    border-color: #00e5ff;
+    box-shadow: 
+        0 4px 12px rgba(0, 0, 0, 0.95),
+        0 0 8px rgba(0, 229, 255, 0.4),
+        inset 0 1px 0 rgba(255, 255, 255, 0.5),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.9);
 }
-.strip.master scale.fader slider:hover {
-    background: linear-gradient(180deg, #ff8080 0%, #f04242 45%, #b02020 55%, #e84848 100%);
+.strip.master scale.fader slider, scale.master-fader slider {
+    min-width: 28px;
+    min-height: 28px;
+    border-radius: 1px;
+    border: 1px solid #5c0f0f;
+    background: linear-gradient(180deg,
+        #f87171 0%,
+        #dc2626 14%,
+        #b91c1c 32%,
+        #7f1d1d 44%,
+        #ffffff 45%,
+        #ffffff 55%,
+        #5c0f0f 56%,
+        #991b1b 68%,
+        #b91c1c 86%,
+        #7f1d1d 100%
+    );
+    box-shadow: 
+        0 4px 10px rgba(185, 28, 28, 0.5),
+        0 2px 4px rgba(0, 0, 0, 0.9),
+        inset 0 1px 0 rgba(255, 255, 255, 0.45),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.8);
+}
+.strip.master scale.fader slider:hover, scale.master-fader slider:hover {
+    border-color: #ef4444;
+    background: linear-gradient(180deg,
+        #fca5a5 0%,
+        #ef4444 14%,
+        #dc2626 32%,
+        #991b1b 44%,
+        #ffffff 45%,
+        #ffffff 55%,
+        #7f1d1d 56%,
+        #b91c1c 68%,
+        #dc2626 86%,
+        #991b1b 100%
+    );
+    box-shadow: 
+        0 4px 12px rgba(239, 68, 68, 0.6),
+        0 0 8px rgba(239, 68, 68, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.8);
 }
 /* Studio Buttons */
 .btn-mute, .btn-solo, .btn-dim, .btn-mono {
@@ -2289,7 +2363,7 @@ scale.fader slider:hover {
     filter: grayscale(70%);
 }
 .inserts-bypassed {
-    border-color: #d97706 !important;
+    border-color: #d97706;
 }
 .btn-lock-locked {
     background: linear-gradient(180deg, #3b1818 0%, #291010 100%);

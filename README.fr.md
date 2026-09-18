@@ -41,6 +41,7 @@ Détails et options dans [Installation](#installation-toute-distro).
 | `kernel/motu424_hw.c` | **Abstraction matérielle — le seul fichier avec la vraie sémantique des registres** |
 | `kernel/motu424_pcm.c` | Callbacks PCM ALSA (lecture + capture) |
 | `tools/motu424-probe.c` | Énumérateur/dumpeur de BARs (modèle fenêtré) en espace utilisateur pour la rétro-ingénierie |
+| `tools/motu424-probe-gui` | **Inspecteur de BARs & sonde GTK4** (registres, dumpeur mémoire, mode démo) |
 | `tools/motu424-ctl.c` | **CLI de gestion façon CueMix** (horloge/format + mixeur de monitoring) via alsa-lib |
 | `tools/motu424-gui` | **Console de mixage GTK4** façon CueMix FX (front-end de `motu424-ctl`) |
 | `tools/re/` | Aides à la RE statique (`vtable-scan.py`, `xref.py` basé sur capstone) |

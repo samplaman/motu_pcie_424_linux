@@ -173,8 +173,8 @@ build_tools() {
 	$SUDO install -m0755 tools/motu424-gui /usr/local/bin/ 2>/dev/null && {
 		$SUDO install -Dm0644 tools/motu424-gui.desktop \
 			/usr/local/share/applications/motu424-gui.desktop 2>/dev/null || true
-		[ "$WANT_GUI" -eq 1 ] || log "GUI installed: run 'motu424-gui' (needs python-gobject+gtk4; ./install.sh --gui adds them)"
 	} || warn "motu424-gui not installed"
+	$SUDO install -m0755 tools/motu424-probe-gui /usr/local/bin/ 2>/dev/null || true
 }
 
 install_dkms() {
@@ -228,7 +228,7 @@ uninstall() {
 	if have dkms; then $SUDO dkms remove "$PKG/$VER" --all 2>/dev/null || true; fi
 	$SUDO rm -rf "/usr/src/$PKG-$VER"
 	$SUDO rm -f /usr/local/bin/motu424-probe /usr/local/bin/motu424-ctl \
-		/usr/local/bin/motu424-gui \
+		/usr/local/bin/motu424-gui /usr/local/bin/motu424-probe-gui \
 		/usr/local/share/applications/motu424-gui.desktop
 	if [ -f /lib/firmware/HDExpress_FullImageRun.bin ]; then
 		log "removing /lib/firmware/HDExpress_FullImageRun.bin"

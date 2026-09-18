@@ -50,5 +50,8 @@ unload:
 probe: tools
 	./tools/motu424-probe
 
+probe-gui:
+	./tools/motu424-probe-gui
+
 ctl: tools
 	-./tools/motu424-ctl

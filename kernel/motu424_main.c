@@ -213,6 +213,10 @@ static int motu424_probe(struct pci_dev *pci, const struct pci_device_id *ent)
 	if (err < 0)
 		return err;
 
+	err = motu424_mixer_init(chip);
+	if (err < 0)
+		return err;
+
 	strscpy(card->driver, MOTU424_DRIVER_NAME, sizeof(card->driver));
 	strscpy(card->shortname, chip->model, sizeof(card->shortname));
 	snprintf(card->longname, sizeof(card->longname),

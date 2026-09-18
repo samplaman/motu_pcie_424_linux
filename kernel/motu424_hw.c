@@ -32,6 +32,8 @@
 #include <linux/module.h>
 #include <linux/firmware.h>
 #include <linux/delay.h>
+#include <sound/core.h>
+#include <sound/control.h>
 
 #include "motu424.h"
 
@@ -1030,6 +1032,818 @@ int motu424_dsp_get_meters(struct motu424 *chip, u32 *meter_buf, int count)
 		if (meter_buf)
 			meter_buf[i] = motu424_rd32(chip, chip->pcie_dsp_offset + 0x100 + i * 4);
 	}
+
+	return 0;
+}
+
+/* =========================================================================
+ * CueMix FX Hardware Write Handlers & ALSA Mixer Kcontrols (Phase 5.3)
+ * =========================================================================
+ */
+
+int motu424_hw_set_bus_master(struct motu424 *chip, u8 bus, u16 vol, bool mute)
+{
+	unsigned long flags;
+
+	if (bus >= MOTU424_MIX_BUSES)
+		return -EINVAL;
+
+	spin_lock_irqsave(&chip->lock, flags);
+	chip->mixer.bus_master_vol[bus] = vol;
+	chip->mixer.bus_master_mute[bus] = mute;
+
+	/* 1. If PCIe hardware DSP engine is active, forward via mailbox */
+	if (chip->is_pcie && chip->has_dsp && chip->dsp_running) {
+		spin_unlock_irqrestore(&chip->lock, flags);
+		return motu424_dsp_set_master(chip, bus, vol, mute, false);
+	}
+
+	/* 2. MMIO CueMix coefficient region (Window B) */
+	if (chip->mix_base) {
+		u32 offset = chip->mix_base + (bus * 0x10);
+		u32 val = ((u32)vol & 0xFFFF) | (mute ? BIT(16) : 0);
+		motu424_wr32(chip, offset, val);
+	}
+	spin_unlock_irqrestore(&chip->lock, flags);
+
+	return 0;
+}
+
+int motu424_hw_set_matrix_send(struct motu424 *chip, u8 bus, u8 ch, u16 vol, s16 pan, bool mute, bool solo)
+{
+	unsigned long flags;
+	u16 eff_vol;
+	bool bus_has_solo = false;
+	int i;
+
+	if (bus >= MOTU424_MIX_BUSES || ch >= MOTU424_MIX_CHANNELS)
+		return -EINVAL;
+
+	spin_lock_irqsave(&chip->lock, flags);
+	chip->mixer.send_vol[bus][ch] = vol;
+	chip->mixer.send_pan[bus][ch] = pan;
+	chip->mixer.send_mute[bus][ch] = mute;
+	chip->mixer.send_solo[bus][ch] = solo;
+
+	/* Determine if solo-in-place is active on this mix bus */
+	for (i = 0; i < MOTU424_MIX_CHANNELS; i++) {
+		if (chip->mixer.send_solo[bus][i]) {
+			bus_has_solo = true;
+			break;
+		}
+	}
+
+	if (mute || (bus_has_solo && !solo))
+		eff_vol = 0;
+	else
+		eff_vol = vol;
+
+	/* 1. If PCIe hardware DSP engine is active, forward via mailbox */
+	if (chip->is_pcie && chip->has_dsp && chip->dsp_running) {
+		spin_unlock_irqrestore(&chip->lock, flags);
+		return motu424_dsp_set_mix(chip, bus, ch, eff_vol, pan);
+	}
+
+	/* 2. MMIO CueMix coefficient region (Window B) */
+	if (chip->mix_base) {
+		u32 offset = chip->mix_base + 0x40 + ((bus * MOTU424_MIX_CHANNELS + ch) * 4);
+		u32 val = (((u32)(u16)pan) << 16) | ((u32)eff_vol & 0xFFFF);
+		motu424_wr32(chip, offset, val);
+	}
+	spin_unlock_irqrestore(&chip->lock, flags);
+
+	return 0;
+}
+
+int motu424_hw_set_input_trim(struct motu424 *chip, u8 ch, s8 trim, bool pad, bool phase, bool mute)
+{
+	unsigned long flags;
+
+	if (ch >= MOTU424_MIX_CHANNELS)
+		return -EINVAL;
+
+	spin_lock_irqsave(&chip->lock, flags);
+	chip->mixer.in_trim[ch] = trim;
+	chip->mixer.in_pad[ch] = pad;
+	chip->mixer.in_phase[ch] = phase;
+	chip->mixer.in_mute[ch] = mute;
+
+	/* Forward to hardware MMIO if available */
+	if (chip->mix_base) {
+		u32 offset = chip->mix_base + 0x200 + (ch * 4);
+		u32 val = ((u32)(u8)trim) |
+			  (pad ? BIT(8) : 0) |
+			  (phase ? BIT(9) : 0) |
+			  (mute ? BIT(10) : 0);
+		motu424_wr32(chip, offset, val);
+	}
+	spin_unlock_irqrestore(&chip->lock, flags);
+
+	return 0;
+}
+
+int motu424_hw_set_clock_source(struct motu424 *chip, u8 source)
+{
+	unsigned long flags;
+
+	if (source > 4)
+		return -EINVAL;
+
+	spin_lock_irqsave(&chip->lock, flags);
+	chip->mixer.clock_source = source;
+	if (chip->audio_base)
+		motu424_awr(chip, MOTU424_AREG_PARAM, (u32)source);
+	spin_unlock_irqrestore(&chip->lock, flags);
+
+	return 0;
+}
+
+/* -------------------------------------------------------------------------
+ * ALSA Mixer Control Definitions & Callbacks
+ * -------------------------------------------------------------------------
+ */
+
+enum motu424_ctl_type {
+	CTL_CLOCK_SOURCE,
+	CTL_CLOCK_RATE,
+	CTL_SAMPLE_RATE,
+	CTL_PATCHBAY_SW,
+	CTL_TALKBACK_SW,
+	CTL_LISTENBACK_SW,
+	CTL_TALKBACK_ATTEN,
+	CTL_METERS_SW,
+	CTL_SLOT_IFACE,
+
+	CTL_BUS_MASTER_VOL,
+	CTL_BUS_MASTER_MUTE,
+
+	CTL_SEND_VOL,
+	CTL_SEND_PAN,
+	CTL_SEND_MUTE,
+	CTL_SEND_SOLO,
+
+	CTL_IN_TRIM,
+	CTL_IN_PAD,
+	CTL_IN_PHASE,
+	CTL_IN_STEREO,
+	CTL_IN_MUTE,
+
+	CTL_OUT_VOL,
+	CTL_OUT_MUTE,
+	CTL_OUT_STEREO,
+};
+
+#define MOTU424_CTL_VAL(type, bus, ch) \
+	(((unsigned long)(type) & 0xff) | \
+	 (((unsigned long)(bus) & 0xff) << 8) | \
+	 (((unsigned long)(ch) & 0xff) << 16))
+
+#define MOTU424_CTL_TYPE(val) ((val) & 0xff)
+#define MOTU424_CTL_BUS(val)  (((val) >> 8) & 0xff)
+#define MOTU424_CTL_CH(val)   (((val) >> 16) & 0xff)
+
+static const char * const clock_source_texts[] = {
+	"Internal", "Word Clock", "ADAT", "SPDIF", "AES/EBU"
+};
+
+static const char * const sample_rate_texts[] = {
+	"44100", "48000", "88200", "96000", "176400", "192000"
+};
+static const unsigned int sample_rate_values[] = {
+	44100, 48000, 88200, 96000, 176400, 192000
+};
+
+static const char * const slot_iface_texts[] = {
+	"None", "24I/O", "2408mk3", "2408mk2", "2408", "1224", "HD192", "1296", "308", "896HD"
+};
+
+/* --- Integer controls: info / get / put --- */
+
+static int motu424_ctl_int_info(struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo)
+{
+	unsigned long val = kctl->private_value;
+	u8 type = MOTU424_CTL_TYPE(val);
+
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+
+	switch (type) {
+	case CTL_SEND_PAN:
+		uinfo->value.integer.min = -100;
+		uinfo->value.integer.max = 100;
+		break;
+	case CTL_IN_TRIM:
+		uinfo->value.integer.min = -12;
+		uinfo->value.integer.max = 12;
+		break;
+	case CTL_TALKBACK_ATTEN:
+		uinfo->value.integer.min = 0;
+		uinfo->value.integer.max = 40;
+		break;
+	case CTL_CLOCK_RATE:
+		uinfo->value.integer.min = 0;
+		uinfo->value.integer.max = 192000;
+		break;
+	default: /* volumes: 0..100 */
+		uinfo->value.integer.min = 0;
+		uinfo->value.integer.max = 100;
+		break;
+	}
+	uinfo->value.integer.step = 1;
+	return 0;
+}
+
+static int motu424_ctl_int_get(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct motu424 *chip = snd_kcontrol_chip(kctl);
+	unsigned long val = kctl->private_value;
+	u8 type = MOTU424_CTL_TYPE(val);
+	u8 bus = MOTU424_CTL_BUS(val);
+	u8 ch = MOTU424_CTL_CH(val);
+
+	switch (type) {
+	case CTL_BUS_MASTER_VOL:
+		ucontrol->value.integer.value[0] = chip->mixer.bus_master_vol[bus];
+		break;
+	case CTL_SEND_VOL:
+		ucontrol->value.integer.value[0] = chip->mixer.send_vol[bus][ch];
+		break;
+	case CTL_SEND_PAN:
+		ucontrol->value.integer.value[0] = chip->mixer.send_pan[bus][ch];
+		break;
+	case CTL_IN_TRIM:
+		ucontrol->value.integer.value[0] = chip->mixer.in_trim[ch];
+		break;
+	case CTL_OUT_VOL:
+		ucontrol->value.integer.value[0] = chip->mixer.out_vol[ch];
+		break;
+	case CTL_TALKBACK_ATTEN:
+		ucontrol->value.integer.value[0] = chip->mixer.talkback_atten;
+		break;
+	case CTL_CLOCK_RATE:
+		ucontrol->value.integer.value[0] = chip->rate ? chip->rate : 44100;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int motu424_ctl_int_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct motu424 *chip = snd_kcontrol_chip(kctl);
+	unsigned long val = kctl->private_value;
+	u8 type = MOTU424_CTL_TYPE(val);
+	u8 bus = MOTU424_CTL_BUS(val);
+	u8 ch = MOTU424_CTL_CH(val);
+	long new_val = ucontrol->value.integer.value[0];
+	int change = 0;
+
+	switch (type) {
+	case CTL_BUS_MASTER_VOL:
+		new_val = clamp_val(new_val, 0, 100);
+		if (chip->mixer.bus_master_vol[bus] != new_val) {
+			motu424_hw_set_bus_master(chip, bus, (u16)new_val, chip->mixer.bus_master_mute[bus]);
+			change = 1;
+		}
+		break;
+	case CTL_SEND_VOL:
+		new_val = clamp_val(new_val, 0, 100);
+		if (chip->mixer.send_vol[bus][ch] != new_val) {
+			motu424_hw_set_matrix_send(chip, bus, ch, (u16)new_val,
+						   chip->mixer.send_pan[bus][ch],
+						   chip->mixer.send_mute[bus][ch],
+						   chip->mixer.send_solo[bus][ch]);
+			change = 1;
+		}
+		break;
+	case CTL_SEND_PAN:
+		new_val = clamp_val(new_val, -100, 100);
+		if (chip->mixer.send_pan[bus][ch] != new_val) {
+			motu424_hw_set_matrix_send(chip, bus, ch,
+						   chip->mixer.send_vol[bus][ch],
+						   (s16)new_val,
+						   chip->mixer.send_mute[bus][ch],
+						   chip->mixer.send_solo[bus][ch]);
+			change = 1;
+		}
+		break;
+	case CTL_IN_TRIM:
+		new_val = clamp_val(new_val, -12, 12);
+		if (chip->mixer.in_trim[ch] != new_val) {
+			motu424_hw_set_input_trim(chip, ch, (s8)new_val,
+						  chip->mixer.in_pad[ch],
+						  chip->mixer.in_phase[ch],
+						  chip->mixer.in_mute[ch]);
+			change = 1;
+		}
+		break;
+	case CTL_OUT_VOL:
+		new_val = clamp_val(new_val, 0, 100);
+		if (chip->mixer.out_vol[ch] != new_val) {
+			chip->mixer.out_vol[ch] = (u16)new_val;
+			change = 1;
+		}
+		break;
+	case CTL_TALKBACK_ATTEN:
+		new_val = clamp_val(new_val, 0, 40);
+		if (chip->mixer.talkback_atten != new_val) {
+			chip->mixer.talkback_atten = (u8)new_val;
+			change = 1;
+		}
+		break;
+	case CTL_CLOCK_RATE:
+		return -EPERM;
+	default:
+		return -EINVAL;
+	}
+	return change;
+}
+
+/* --- Boolean controls: info / get / put --- */
+
+static int motu424_ctl_bool_info(struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_BOOLEAN;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = 1;
+	return 0;
+}
+
+static int motu424_ctl_bool_get(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct motu424 *chip = snd_kcontrol_chip(kctl);
+	unsigned long val = kctl->private_value;
+	u8 type = MOTU424_CTL_TYPE(val);
+	u8 bus = MOTU424_CTL_BUS(val);
+	u8 ch = MOTU424_CTL_CH(val);
+
+	switch (type) {
+	case CTL_BUS_MASTER_MUTE:
+		ucontrol->value.integer.value[0] = chip->mixer.bus_master_mute[bus];
+		break;
+	case CTL_SEND_MUTE:
+		ucontrol->value.integer.value[0] = chip->mixer.send_mute[bus][ch];
+		break;
+	case CTL_SEND_SOLO:
+		ucontrol->value.integer.value[0] = chip->mixer.send_solo[bus][ch];
+		break;
+	case CTL_IN_PAD:
+		ucontrol->value.integer.value[0] = chip->mixer.in_pad[ch];
+		break;
+	case CTL_IN_PHASE:
+		ucontrol->value.integer.value[0] = chip->mixer.in_phase[ch];
+		break;
+	case CTL_IN_STEREO:
+		ucontrol->value.integer.value[0] = chip->mixer.in_stereo[ch];
+		break;
+	case CTL_IN_MUTE:
+		ucontrol->value.integer.value[0] = chip->mixer.in_mute[ch];
+		break;
+	case CTL_OUT_MUTE:
+		ucontrol->value.integer.value[0] = chip->mixer.out_mute[ch];
+		break;
+	case CTL_OUT_STEREO:
+		ucontrol->value.integer.value[0] = chip->mixer.out_stereo[ch];
+		break;
+	case CTL_PATCHBAY_SW:
+		ucontrol->value.integer.value[0] = chip->mixer.patchbay_bypass;
+		break;
+	case CTL_TALKBACK_SW:
+		ucontrol->value.integer.value[0] = chip->mixer.talkback;
+		break;
+	case CTL_LISTENBACK_SW:
+		ucontrol->value.integer.value[0] = chip->mixer.listenback;
+		break;
+	case CTL_METERS_SW:
+		ucontrol->value.integer.value[0] = chip->mixer.meters_enabled;
+		break;
+	default:
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int motu424_ctl_bool_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct motu424 *chip = snd_kcontrol_chip(kctl);
+	unsigned long val = kctl->private_value;
+	u8 type = MOTU424_CTL_TYPE(val);
+	u8 bus = MOTU424_CTL_BUS(val);
+	u8 ch = MOTU424_CTL_CH(val);
+	bool b = !!ucontrol->value.integer.value[0];
+	int change = 0;
+
+	switch (type) {
+	case CTL_BUS_MASTER_MUTE:
+		if (chip->mixer.bus_master_mute[bus] != b) {
+			motu424_hw_set_bus_master(chip, bus, chip->mixer.bus_master_vol[bus], b);
+			change = 1;
+		}
+		break;
+	case CTL_SEND_MUTE:
+		if (chip->mixer.send_mute[bus][ch] != b) {
+			motu424_hw_set_matrix_send(chip, bus, ch,
+						   chip->mixer.send_vol[bus][ch],
+						   chip->mixer.send_pan[bus][ch],
+						   b,
+						   chip->mixer.send_solo[bus][ch]);
+			change = 1;
+		}
+		break;
+	case CTL_SEND_SOLO:
+		if (chip->mixer.send_solo[bus][ch] != b) {
+			motu424_hw_set_matrix_send(chip, bus, ch,
+						   chip->mixer.send_vol[bus][ch],
+						   chip->mixer.send_pan[bus][ch],
+						   chip->mixer.send_mute[bus][ch],
+						   b);
+			change = 1;
+		}
+		break;
+	case CTL_IN_PAD:
+		if (chip->mixer.in_pad[ch] != b) {
+			motu424_hw_set_input_trim(chip, ch, chip->mixer.in_trim[ch],
+						  b, chip->mixer.in_phase[ch], chip->mixer.in_mute[ch]);
+			change = 1;
+		}
+		break;
+	case CTL_IN_PHASE:
+		if (chip->mixer.in_phase[ch] != b) {
+			motu424_hw_set_input_trim(chip, ch, chip->mixer.in_trim[ch],
+						  chip->mixer.in_pad[ch], b, chip->mixer.in_mute[ch]);
+			change = 1;
+		}
+		break;
+	case CTL_IN_STEREO:
+		if (chip->mixer.in_stereo[ch] != b) {
+			chip->mixer.in_stereo[ch] = b;
+			change = 1;
+		}
+		break;
+	case CTL_IN_MUTE:
+		if (chip->mixer.in_mute[ch] != b) {
+			motu424_hw_set_input_trim(chip, ch, chip->mixer.in_trim[ch],
+						  chip->mixer.in_pad[ch], chip->mixer.in_phase[ch], b);
+			change = 1;
+		}
+		break;
+	case CTL_OUT_MUTE:
+		if (chip->mixer.out_mute[ch] != b) {
+			chip->mixer.out_mute[ch] = b;
+			change = 1;
+		}
+		break;
+	case CTL_OUT_STEREO:
+		if (chip->mixer.out_stereo[ch] != b) {
+			chip->mixer.out_stereo[ch] = b;
+			change = 1;
+		}
+		break;
+	case CTL_PATCHBAY_SW:
+		if (chip->mixer.patchbay_bypass != b) {
+			chip->mixer.patchbay_bypass = b;
+			change = 1;
+		}
+		break;
+	case CTL_TALKBACK_SW:
+		if (chip->mixer.talkback != b) {
+			chip->mixer.talkback = b;
+			change = 1;
+		}
+		break;
+	case CTL_LISTENBACK_SW:
+		if (chip->mixer.listenback != b) {
+			chip->mixer.listenback = b;
+			change = 1;
+		}
+		break;
+	case CTL_METERS_SW:
+		if (chip->mixer.meters_enabled != b) {
+			chip->mixer.meters_enabled = b;
+			change = 1;
+		}
+		break;
+	default:
+		return -EINVAL;
+	}
+	return change;
+}
+
+/* --- Enumerated controls: info / get / put --- */
+
+static int motu424_ctl_enum_info(struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo)
+{
+	unsigned long val = kctl->private_value;
+	u8 type = MOTU424_CTL_TYPE(val);
+
+	if (type == CTL_CLOCK_SOURCE)
+		return snd_ctl_enum_info(uinfo, 1, ARRAY_SIZE(clock_source_texts), clock_source_texts);
+	else if (type == CTL_SAMPLE_RATE)
+		return snd_ctl_enum_info(uinfo, 1, ARRAY_SIZE(sample_rate_texts), sample_rate_texts);
+	else if (type == CTL_SLOT_IFACE)
+		return snd_ctl_enum_info(uinfo, 1, ARRAY_SIZE(slot_iface_texts), slot_iface_texts);
+	return -EINVAL;
+}
+
+static int motu424_ctl_enum_get(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct motu424 *chip = snd_kcontrol_chip(kctl);
+	unsigned long val = kctl->private_value;
+	u8 type = MOTU424_CTL_TYPE(val);
+	u8 slot = MOTU424_CTL_BUS(val);
+
+	if (type == CTL_CLOCK_SOURCE) {
+		ucontrol->value.enumerated.item[0] = chip->mixer.clock_source;
+		return 0;
+	} else if (type == CTL_SAMPLE_RATE) {
+		unsigned int r = chip->rate ? chip->rate : 44100;
+		int i;
+		ucontrol->value.enumerated.item[0] = 0;
+		for (i = 0; i < ARRAY_SIZE(sample_rate_values); i++) {
+			if (sample_rate_values[i] == r) {
+				ucontrol->value.enumerated.item[0] = i;
+				break;
+			}
+		}
+		return 0;
+	} else if (type == CTL_SLOT_IFACE) {
+		if (slot < 4)
+			ucontrol->value.enumerated.item[0] = chip->mixer.slot_iface[slot];
+		else
+			ucontrol->value.enumerated.item[0] = 0;
+		return 0;
+	}
+	return -EINVAL;
+}
+
+static int motu424_ctl_enum_put(struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct motu424 *chip = snd_kcontrol_chip(kctl);
+	unsigned long val = kctl->private_value;
+	u8 type = MOTU424_CTL_TYPE(val);
+	u8 slot = MOTU424_CTL_BUS(val);
+	unsigned int item = ucontrol->value.enumerated.item[0];
+
+	if (type == CTL_CLOCK_SOURCE) {
+		if (item >= ARRAY_SIZE(clock_source_texts))
+			return -EINVAL;
+		if (chip->mixer.clock_source != item) {
+			motu424_hw_set_clock_source(chip, (u8)item);
+			return 1;
+		}
+		return 0;
+	} else if (type == CTL_SAMPLE_RATE) {
+		if (item >= ARRAY_SIZE(sample_rate_values))
+			return -EINVAL;
+		if (chip->rate != sample_rate_values[item]) {
+			chip->rate = sample_rate_values[item];
+			motu424_hw_set_rate(chip, sample_rate_values[item]);
+			return 1;
+		}
+		return 0;
+	} else if (type == CTL_SLOT_IFACE) {
+		if (slot >= 4 || item >= ARRAY_SIZE(slot_iface_texts))
+			return -EINVAL;
+		if (chip->mixer.slot_iface[slot] != item) {
+			chip->mixer.slot_iface[slot] = (u8)item;
+			return 1;
+		}
+		return 0;
+	}
+	return -EINVAL;
+}
+
+/* Helper to add one control element */
+static int add_mixer_control(struct motu424 *chip, const char *name,
+			     int (*info)(struct snd_kcontrol *, struct snd_ctl_elem_info *),
+			     int (*get)(struct snd_kcontrol *, struct snd_ctl_elem_value *),
+			     int (*put)(struct snd_kcontrol *, struct snd_ctl_elem_value *),
+			     unsigned long priv_val)
+{
+	struct snd_kcontrol_new knew = {
+		.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+		.name = name,
+		.info = info,
+		.get = get,
+		.put = put,
+		.private_value = priv_val,
+	};
+	return snd_ctl_add(chip->card, snd_ctl_new1(&knew, chip));
+}
+
+int motu424_mixer_init(struct motu424 *chip)
+{
+	char name[64];
+	int b, c, s, err;
+
+	/* 1. Initialize default mixer values */
+	chip->mixer.clock_source = 0; /* Internal */
+	chip->mixer.slot_iface[0] = 1; /* Slot A: 24I/O */
+	chip->mixer.slot_iface[1] = 0; /* None */
+	chip->mixer.slot_iface[2] = 0;
+	chip->mixer.slot_iface[3] = 0;
+	chip->mixer.talkback_atten = 20;
+	chip->mixer.patchbay_bypass = false;
+
+	for (b = 0; b < MOTU424_MIX_BUSES; b++) {
+		chip->mixer.bus_master_vol[b] = 100;
+		chip->mixer.bus_master_mute[b] = false;
+		for (c = 0; c < MOTU424_MIX_CHANNELS; c++) {
+			chip->mixer.send_vol[b][c] = (b == 0) ? 100 : 0;
+			chip->mixer.send_pan[b][c] = (c % 2 == 0) ? -100 : 100;
+			chip->mixer.send_mute[b][c] = false;
+			chip->mixer.send_solo[b][c] = false;
+		}
+	}
+
+	for (c = 0; c < MOTU424_MIX_CHANNELS; c++) {
+		chip->mixer.in_trim[c] = 0;
+		chip->mixer.in_pad[c] = false;
+		chip->mixer.in_phase[c] = false;
+		chip->mixer.in_stereo[c] = false;
+		chip->mixer.in_mute[c] = false;
+		chip->mixer.out_vol[c] = 100;
+		chip->mixer.out_mute[c] = false;
+		chip->mixer.out_stereo[c] = false;
+	}
+
+	/* 2. Global controls */
+	err = add_mixer_control(chip, "Clock Source", motu424_ctl_enum_info,
+				motu424_ctl_enum_get, motu424_ctl_enum_put,
+				MOTU424_CTL_VAL(CTL_CLOCK_SOURCE, 0, 0));
+	if (err < 0)
+		return err;
+
+	err = add_mixer_control(chip, "Clock Rate", motu424_ctl_int_info,
+				motu424_ctl_int_get, motu424_ctl_int_put,
+				MOTU424_CTL_VAL(CTL_CLOCK_RATE, 0, 0));
+	if (err < 0)
+		return err;
+
+	err = add_mixer_control(chip, "Sample Rate", motu424_ctl_enum_info,
+				motu424_ctl_enum_get, motu424_ctl_enum_put,
+				MOTU424_CTL_VAL(CTL_SAMPLE_RATE, 0, 0));
+	if (err < 0)
+		return err;
+
+	err = add_mixer_control(chip, "Patchbay Switch", motu424_ctl_bool_info,
+				motu424_ctl_bool_get, motu424_ctl_bool_put,
+				MOTU424_CTL_VAL(CTL_PATCHBAY_SW, 0, 0));
+	if (err < 0)
+		return err;
+
+	err = add_mixer_control(chip, "Talkback Switch", motu424_ctl_bool_info,
+				motu424_ctl_bool_get, motu424_ctl_bool_put,
+				MOTU424_CTL_VAL(CTL_TALKBACK_SW, 0, 0));
+	if (err < 0)
+		return err;
+
+	err = add_mixer_control(chip, "Listenback Switch", motu424_ctl_bool_info,
+				motu424_ctl_bool_get, motu424_ctl_bool_put,
+				MOTU424_CTL_VAL(CTL_LISTENBACK_SW, 0, 0));
+	if (err < 0)
+		return err;
+
+	err = add_mixer_control(chip, "Talkback Atten Volume", motu424_ctl_int_info,
+				motu424_ctl_int_get, motu424_ctl_int_put,
+				MOTU424_CTL_VAL(CTL_TALKBACK_ATTEN, 0, 0));
+	if (err < 0)
+		return err;
+
+	err = add_mixer_control(chip, "Meters", motu424_ctl_bool_info,
+				motu424_ctl_bool_get, motu424_ctl_bool_put,
+				MOTU424_CTL_VAL(CTL_METERS_SW, 0, 0));
+	if (err < 0)
+		return err;
+
+	/* 3. AudioWire interface model per slot (A..D) */
+	for (s = 0; s < 4; s++) {
+		snprintf(name, sizeof(name), "Slot %c Interface", 'A' + s);
+		err = add_mixer_control(chip, name, motu424_ctl_enum_info,
+					motu424_ctl_enum_get, motu424_ctl_enum_put,
+					MOTU424_CTL_VAL(CTL_SLOT_IFACE, s, 0));
+		if (err < 0)
+			return err;
+	}
+
+	/* 4. Mix Bus Master controls (Mix 00..03) */
+	for (b = 0; b < MOTU424_MIX_BUSES; b++) {
+		snprintf(name, sizeof(name), "Mix %02d Master Volume", b);
+		err = add_mixer_control(chip, name, motu424_ctl_int_info,
+					motu424_ctl_int_get, motu424_ctl_int_put,
+					MOTU424_CTL_VAL(CTL_BUS_MASTER_VOL, b, 0));
+		if (err < 0)
+			return err;
+
+		snprintf(name, sizeof(name), "Mix %02d Mute Switch", b);
+		err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+					motu424_ctl_bool_get, motu424_ctl_bool_put,
+					MOTU424_CTL_VAL(CTL_BUS_MASTER_MUTE, b, 0));
+		if (err < 0)
+			return err;
+	}
+
+	/* 5. Matrix Sends: Mix KK Input NN ... */
+	for (b = 0; b < MOTU424_MIX_BUSES; b++) {
+		for (c = 0; c < MOTU424_MIX_CHANNELS; c++) {
+			snprintf(name, sizeof(name), "Mix %02d Input %02d Volume", b, c);
+			err = add_mixer_control(chip, name, motu424_ctl_int_info,
+						motu424_ctl_int_get, motu424_ctl_int_put,
+						MOTU424_CTL_VAL(CTL_SEND_VOL, b, c));
+			if (err < 0)
+				return err;
+
+			snprintf(name, sizeof(name), "Mix %02d Input %02d Pan", b, c);
+			err = add_mixer_control(chip, name, motu424_ctl_int_info,
+						motu424_ctl_int_get, motu424_ctl_int_put,
+						MOTU424_CTL_VAL(CTL_SEND_PAN, b, c));
+			if (err < 0)
+				return err;
+
+			snprintf(name, sizeof(name), "Mix %02d Input %02d Mute Switch", b, c);
+			err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+						motu424_ctl_bool_get, motu424_ctl_bool_put,
+						MOTU424_CTL_VAL(CTL_SEND_MUTE, b, c));
+			if (err < 0)
+				return err;
+
+			snprintf(name, sizeof(name), "Mix %02d Input %02d Solo Switch", b, c);
+			err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+						motu424_ctl_bool_get, motu424_ctl_bool_put,
+						MOTU424_CTL_VAL(CTL_SEND_SOLO, b, c));
+			if (err < 0)
+				return err;
+		}
+	}
+
+	/* 6. Input Channel Conditioning: Input NN ... */
+	for (c = 0; c < MOTU424_MIX_CHANNELS; c++) {
+		snprintf(name, sizeof(name), "Input %02d Trim Volume", c);
+		err = add_mixer_control(chip, name, motu424_ctl_int_info,
+					motu424_ctl_int_get, motu424_ctl_int_put,
+					MOTU424_CTL_VAL(CTL_IN_TRIM, 0, c));
+		if (err < 0)
+			return err;
+
+		snprintf(name, sizeof(name), "Input %02d Pad Switch", c);
+		err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+					motu424_ctl_bool_get, motu424_ctl_bool_put,
+					MOTU424_CTL_VAL(CTL_IN_PAD, 0, c));
+		if (err < 0)
+			return err;
+
+		snprintf(name, sizeof(name), "Input %02d Phase Switch", c);
+		err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+					motu424_ctl_bool_get, motu424_ctl_bool_put,
+					MOTU424_CTL_VAL(CTL_IN_PHASE, 0, c));
+		if (err < 0)
+			return err;
+
+		snprintf(name, sizeof(name), "Input %02d Stereo Switch", c);
+		err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+					motu424_ctl_bool_get, motu424_ctl_bool_put,
+					MOTU424_CTL_VAL(CTL_IN_STEREO, 0, c));
+		if (err < 0)
+			return err;
+
+		snprintf(name, sizeof(name), "Input %02d Mute Switch", c);
+		err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+					motu424_ctl_bool_get, motu424_ctl_bool_put,
+					MOTU424_CTL_VAL(CTL_IN_MUTE, 0, c));
+		if (err < 0)
+			return err;
+	}
+
+	/* 7. Output Channel Monitoring: Output NN ... */
+	for (c = 0; c < MOTU424_MIX_CHANNELS; c++) {
+		snprintf(name, sizeof(name), "Output %02d Volume", c);
+		err = add_mixer_control(chip, name, motu424_ctl_int_info,
+					motu424_ctl_int_get, motu424_ctl_int_put,
+					MOTU424_CTL_VAL(CTL_OUT_VOL, 0, c));
+		if (err < 0)
+			return err;
+
+		snprintf(name, sizeof(name), "Output %02d Mute Switch", c);
+		err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+					motu424_ctl_bool_get, motu424_ctl_bool_put,
+					MOTU424_CTL_VAL(CTL_OUT_MUTE, 0, c));
+		if (err < 0)
+			return err;
+
+		snprintf(name, sizeof(name), "Output %02d Stereo Switch", c);
+		err = add_mixer_control(chip, name, motu424_ctl_bool_info,
+					motu424_ctl_bool_get, motu424_ctl_bool_put,
+					MOTU424_CTL_VAL(CTL_OUT_STEREO, 0, c));
+		if (err < 0)
+			return err;
+	}
+
+	dev_info(&chip->pci->dev,
+		 "registered CueMix FX mixer (%d mix buses, %d inputs, %d sends, %d outputs)\n",
+		 MOTU424_MIX_BUSES, MOTU424_MIX_CHANNELS,
+		 MOTU424_MIX_BUSES * MOTU424_MIX_CHANNELS, MOTU424_MIX_CHANNELS);
 
 	return 0;
 }

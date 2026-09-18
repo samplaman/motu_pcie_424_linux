@@ -283,6 +283,47 @@ struct motu424_bar {
 	unsigned long flags;		/* IORESOURCE_MEM / _IO    */
 };
 
+/* --------------------------------------------------------------------------
+ * CueMix FX Mixer & Matrix Controls (Phase 5.3)
+ * --------------------------------------------------------------------------
+ * 4-bus stereo summing matrix, 24 inputs, 24 outputs.
+ */
+#define MOTU424_MIX_BUSES	4
+#define MOTU424_MIX_CHANNELS	24
+
+struct motu424_mixer {
+	/* Bus Master */
+	u16 bus_master_vol[MOTU424_MIX_BUSES];		/* 0..100 */
+	bool bus_master_mute[MOTU424_MIX_BUSES];
+
+	/* Matrix Send (bus, ch) */
+	u16 send_vol[MOTU424_MIX_BUSES][MOTU424_MIX_CHANNELS];	/* 0..100 */
+	s16 send_pan[MOTU424_MIX_BUSES][MOTU424_MIX_CHANNELS];	/* -100..+100 */
+	bool send_mute[MOTU424_MIX_BUSES][MOTU424_MIX_CHANNELS];
+	bool send_solo[MOTU424_MIX_BUSES][MOTU424_MIX_CHANNELS];
+
+	/* Input Conditioning */
+	s8 in_trim[MOTU424_MIX_CHANNELS];		/* -12..+12 dB */
+	bool in_pad[MOTU424_MIX_CHANNELS];
+	bool in_phase[MOTU424_MIX_CHANNELS];
+	bool in_stereo[MOTU424_MIX_CHANNELS];
+	bool in_mute[MOTU424_MIX_CHANNELS];
+
+	/* Output Monitoring */
+	u16 out_vol[MOTU424_MIX_CHANNELS];		/* 0..100 */
+	bool out_mute[MOTU424_MIX_CHANNELS];
+	bool out_stereo[MOTU424_MIX_CHANNELS];
+
+	/* Global Controls */
+	u8 clock_source;	/* 0: Internal, 1: Word, 2: ADAT, 3: SPDIF, 4: AES */
+	u8 slot_iface[4];	/* interface model enum per AudioWire slot A..D */
+	bool patchbay_bypass;
+	bool talkback;
+	bool listenback;
+	u8 talkback_atten;
+	bool meters_enabled;
+};
+
 /* Driver instance (lives in snd_card->private_data). */
 struct motu424 {
 	struct snd_card *card;
@@ -336,6 +377,9 @@ struct motu424 {
 	spinlock_t dsp_lock;
 	u32 dsp_seq;
 
+	/* CueMix FX mixer state */
+	struct motu424_mixer mixer;
+
 	char model[32];			/* human-readable model string */
 };
 
@@ -363,6 +407,13 @@ int  motu424_dsp_set_master(struct motu424 *chip, u8 bus, u16 vol, bool mute, bo
 int  motu424_dsp_set_eq(struct motu424 *chip, u8 ch, u8 band, u16 freq, s16 gain, u16 q);
 int  motu424_dsp_set_dyn(struct motu424 *chip, u8 ch, s16 thresh, u16 ratio, u16 attack, u16 release);
 int  motu424_dsp_get_meters(struct motu424 *chip, u32 *meter_buf, int count);
+
+/* --- motu424_hw.c : mixer & hardware write handlers --- */
+int  motu424_hw_set_bus_master(struct motu424 *chip, u8 bus, u16 vol, bool mute);
+int  motu424_hw_set_matrix_send(struct motu424 *chip, u8 bus, u8 ch, u16 vol, s16 pan, bool mute, bool solo);
+int  motu424_hw_set_input_trim(struct motu424 *chip, u8 ch, s8 trim, bool pad, bool phase, bool mute);
+int  motu424_hw_set_clock_source(struct motu424 *chip, u8 source);
+int  motu424_mixer_init(struct motu424 *chip);
 
 /* --- motu424_pcm.c --- */
 int motu424_pcm_create(struct motu424 *chip);
